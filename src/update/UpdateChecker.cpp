@@ -36,7 +36,8 @@ QNetworkRequest makeRequest(const QUrl &url)
     return request;
 }
 
-// 把 HTTP 状态码翻译成能给用户看的一句话
+// 把 HTTP 状态码翻译成能给用户看的一句话。
+// 404 不走这里 —— 它有两种含义，要先再问一次仓库在不在，见 resolveNotFound()。
 QString describeHttpError(int status, const QString &reason)
 {
     switch (status) {
@@ -45,14 +46,31 @@ QString describeHttpError(int status, const QString &reason)
     case 403:
         // GitHub 对未认证的 API 调用是每分钟 60 次
         return QStringLiteral("GitHub 拒绝了这次请求（403），多半是短时间内查得太频，等几分钟再试");
-    case 404:
-        return QStringLiteral("找不到这个仓库或它还没有发布过 Release（404）");
     default:
         return QStringLiteral("GitHub 返回 HTTP %1 %2").arg(status).arg(reason);
     }
 }
 
 } // namespace
+
+QString repoNotFoundMessage(const QString &repo)
+{
+    return QStringLiteral("找不到仓库 %1。\n\n"
+                          "可能是这两种情况：\n"
+                          "  · src/AppConfig.h 里 updateRepo() 填错了。它要的是"
+                          "「用户名/仓库名」，\n"
+                          "    不是 git 远程地址（git@github.com:用户名/仓库名.git 那种）\n"
+                          "  · 这个仓库是私有的 —— 不带凭据访问不到，也会回 404")
+        .arg(repo);
+}
+
+QString noReleaseYetMessage(const QString &repo)
+{
+    return QStringLiteral("仓库 %1 能找到，但它还没有发布过 Release。\n\n"
+                          "在 GitHub 上发一个就有了：Releases → Create a new release，\n"
+                          "tag 填版本号（比如 v1.0.1），再把安装包或 zip 挂成附件。")
+        .arg(repo);
+}
 
 UpdateChecker::UpdateChecker(QObject *parent) : QObject(parent) {}
 
@@ -123,6 +141,13 @@ void UpdateChecker::onCheckReplyFinished()
         return;
     }
 
+    // 404 得再问一次才能说清楚是哪种情况（见 resolveNotFound），
+    // 这里交给它，它会自己 emit
+    if (status == 404) {
+        resolveNotFound(result);
+        return;
+    }
+
     if (status != 200) {
         result.error = describeHttpError(status, reply->attribute(
                                                     QNetworkRequest::HttpReasonPhraseAttribute)
@@ -161,6 +186,43 @@ void UpdateChecker::onCheckReplyFinished()
     result.updateAvailable = isNewerVersion(latest, result.current);
 
     emit checkFinished(result);
+}
+
+void UpdateChecker::resolveNotFound(const Result &result)
+{
+    // GitHub 对「仓库不存在」和「仓库存在但没有 Release」都回 404，
+    // 只凭第一次的响应分不出来。所以再查一次仓库本身：它还回 404 就是仓库没有，
+    // 回 200 就是仓库在、只是没发过 Release。
+    //
+    // 多花一次请求只在出错路径上，值。
+    const QString repo = updateRepo().trimmed();
+    const QUrl url(QStringLiteral("https://api.github.com/repos/%1").arg(repo));
+
+    QNetworkReply *reply = m_network.get(makeRequest(url));
+    m_reply = reply;
+
+    connect(reply, &QNetworkReply::finished, this, [this, reply, result, repo] {
+        reply->deleteLater();
+        if (m_reply == reply)
+            m_reply = nullptr;
+
+        const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        const QNetworkReply::NetworkError error = reply->error();
+
+        Result resolved = result;
+        if (status == 200) {
+            resolved.error = noReleaseYetMessage(repo);
+        } else if (status == 404) {
+            resolved.error = repoNotFoundMessage(repo);
+        } else if (error != QNetworkReply::NoError && status == 0) {
+            // 第一次问到了 404 说明网络本来是通的，这次却挂了 —— 如实说
+            resolved.error = QStringLiteral("问不到 %1 的状态：%2").arg(repo, reply->errorString());
+        } else {
+            resolved.error = describeHttpError(status, QString());
+        }
+
+        emit checkFinished(resolved);
+    });
 }
 
 void UpdateChecker::download(const ReleaseAsset &asset, const QString &destPath)

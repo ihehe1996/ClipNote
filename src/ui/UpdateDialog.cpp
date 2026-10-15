@@ -173,9 +173,13 @@ void UpdateDialog::applyState(State state)
             QStringLiteral("你正在用的是 %1。").arg(displayVersion(m_result.current));
 
         if (!m_asset) {
-            // 版本是新的，但没有能自动安装的附件 —— 老实说清楚，只给「打开下载页」
-            detail += QStringLiteral("\n这个 Release 里没有可以自动安装的附件"
-                                     "（.zip 或 .exe），请到下载页手动获取。");
+            // 版本是新的，但没有能自动安装的附件 —— 老实说清楚，只给「打开下载页」。
+            // 注意别写成「没有 .zip 或 .exe」：安装程序也是 .exe，但它是被
+            // pickUpdateAsset() 特意跳过的（拿它替换主程序会让用户双击弹出安装界面），
+            // 所以「有 .exe」和「能自动装」不是一回事。
+            detail += QStringLiteral("\n这个 Release 里没有能自动安装的附件 ——"
+                                     "需要挂一个便携 zip，或者一个不是安装程序的 .exe。"
+                                     "请点「打开下载页」手动获取。");
         } else if (!m_result.release.publishedAt.isNull()) {
             detail += QStringLiteral("\n发布于 %1。")
                           .arg(m_result.release.publishedAt.toLocalTime()

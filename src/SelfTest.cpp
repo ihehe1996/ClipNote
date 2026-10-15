@@ -7,6 +7,7 @@
 #include "ui/AppIcon.h"
 #include "ui/Tray.h"
 #include "update/ReleaseInfo.h"
+#include "update/UpdateChecker.h"
 #include "update/UpdateInstaller.h"
 #include "update/Version.h"
 
@@ -473,6 +474,23 @@ int runSelfTest(const QStringList &arguments)
               !parseGitHubRelease(QByteArrayLiteral("<html>502 Bad Gateway</html>"),
                                   &ignored, &notFoundError),
               notFoundError);
+
+        // GitHub 对「仓库不存在」和「仓库存在但没发过 Release」都回 404。
+        // 这两件事用户该干的完全不同（去改配置 / 去发个 Release），
+        // 所以提示必须分得开 —— 早先那条「找不到这个仓库或它还没有发布过 Release」
+        // 把两个原因糊在一句里，等于什么都没说。
+        {
+            const QString repo = QStringLiteral("someone/ClipNote");
+            const QString missing = repoNotFoundMessage(repo);
+            const QString noRelease = noReleaseYetMessage(repo);
+
+            check(QStringLiteral("更新：404 的两种情况给出不同的提示"),
+                  !missing.isEmpty() && !noRelease.isEmpty() && missing != noRelease
+                      && missing.contains(repo) && noRelease.contains(repo)
+                      && missing.contains(QStringLiteral("updateRepo"))
+                      && noRelease.contains(QStringLiteral("Release")),
+                  QStringLiteral("两条提示内容不同，都点明了仓库名，也各自指出了该做什么"));
+        }
     }
 
     // 10. 自更新换文件之前的「铺暂存目录」那一步。这是纯文件操作，

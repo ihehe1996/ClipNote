@@ -15,6 +15,13 @@ QT_END_NAMESPACE
 
 namespace ClipNote {
 
+// 404 的两种可能，对应的处理办法完全不一样：
+// 一种是「配置写错了，去改 updateRepo()」，一种是「还没发 Release，去发一个」。
+// 所以分成两条消息，而且自检里钉了一条「这两条必须能区分开」。
+// 纯函数，拿出来就是为了能在自检里验。
+QString repoNotFoundMessage(const QString &repo);
+QString noReleaseYetMessage(const QString &repo);
+
 // 查 GitHub Releases + 下载附件。**没有界面**，结果全走信号，
 // 这样同一个类既能给「齿轮菜单里手动查」用，也能给「启动时静默查」用。
 class UpdateChecker : public QObject
@@ -55,6 +62,9 @@ signals:
 
 private:
     void onCheckReplyFinished();
+    // /releases/latest 回了 404 之后，再问一次仓库本身在不在，好把
+    // 「仓库不存在」和「仓库有但没发过 Release」分开报
+    void resolveNotFound(const Result &result);
     void onDownloadReplyFinished();
     void onDownloadReadyRead();
     void teardownDownload();
