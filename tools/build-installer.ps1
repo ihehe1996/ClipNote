@@ -200,6 +200,14 @@ $staged = (Get-ChildItem -LiteralPath $StagingDir -Recurse -File | Measure-Objec
 Write-Host "  暂存目录 $staged 个文件" -ForegroundColor DarkGray
 
 # ---- 5. 打安装程序 ----
+# 先把上一轮的产物清掉（包括改名之前留下的旧命名）。留着的话发 Release 时
+# 很容易把上一版的文件拖上去 —— 两个文件名只差一个数字，看走眼太正常了。
+if (Test-Path -LiteralPath $OutputDir) {
+    Get-ChildItem -LiteralPath $OutputDir -File |
+        Where-Object { $_.Name -match '^ClipNote-.*(-setup\.exe|\.zip)$' } |
+        Remove-Item -Force
+}
+
 Write-Host "打安装程序 ..." -ForegroundColor Cyan
 & $Iscc "/DAppVersion=$version" "/DSourceDir=$StagingDir" "/DOutputDir=$OutputDir" $IssFile
 if ($LASTEXITCODE -ne 0) { Fail "Inno Setup 编译失败" }
@@ -207,14 +215,14 @@ if ($LASTEXITCODE -ne 0) { Fail "Inno Setup 编译失败" }
 # ---- 6. 压便携 zip ----
 # 自更新器优先挑 zip（它能整包带上依赖 DLL），所以这个不是可选项
 Write-Host "压便携 zip ..." -ForegroundColor Cyan
-$zipPath = Join-Path $OutputDir "ClipNote-$version.zip"
+$zipPath = Join-Path $OutputDir "ClipNote-v$version.zip"
 if (Test-Path -LiteralPath $zipPath) { Remove-Item -LiteralPath $zipPath -Force }
 Compress-Archive -Path (Join-Path $StagingDir "*") -DestinationPath $zipPath -CompressionLevel Optimal
 
 # ---- 7. 汇报 ----
 Write-Host ""
 Write-Host "产物：" -ForegroundColor Green
-foreach ($artifact in @((Join-Path $OutputDir "ClipNote-$version-setup.exe"), $zipPath)) {
+foreach ($artifact in @((Join-Path $OutputDir "ClipNote-v$version-setup.exe"), $zipPath)) {
     if (Test-Path -LiteralPath $artifact) {
         $mb = [math]::Round((Get-Item -LiteralPath $artifact).Length / 1MB, 1)
         Write-Host ("  {0}  ({1} MB)" -f $artifact, $mb)

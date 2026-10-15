@@ -79,8 +79,8 @@ powershell -File tools/build-installer.ps1
 
 | 产物 | 适合 |
 |---|---|
-| `ClipNote-1.0.0-setup.exe` | 装到 `Program Files`，有开始菜单项、卸载项，安装时可以勾桌面快捷方式和开机自启 |
-| `ClipNote-1.0.0.zip` | 解压到任意目录就能跑，不写注册表、不留痕 |
+| `ClipNote-v1.0.0-setup.exe` | 装到 `Program Files`，有开始菜单项、卸载项，安装时可以勾桌面快捷方式和开机自启 |
+| `ClipNote-v1.0.0.zip` | 解压到任意目录就能跑，不写注册表、不留痕 |
 
 装完之后**自动更新照样能用**：安装程序会把安装目录的写权限授予用户，
 所以 ClipNote 换自己的文件时不需要再弹 UAC。装的时候那**一次** UAC 是躲不掉的
@@ -96,7 +96,7 @@ powershell -File tools/build-installer.ps1
 想从命令行静默安装，**Git Bash 里要加 `MSYS_NO_PATHCONV=1`**：
 
 ```bash
-MSYS_NO_PATHCONV=1 ./ClipNote-1.0.0-setup.exe /VERYSILENT /TASKS="autostart,desktopicon"
+MSYS_NO_PATHCONV=1 ./ClipNote-v1.0.0-setup.exe /VERYSILENT /TASKS="autostart,desktopicon"
 ```
 
 不加的话 MSYS 会把 `/VERYSILENT` 这类以斜杠开头的参数**当成 Unix 路径改写掉**

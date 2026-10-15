@@ -19,6 +19,13 @@
   #define OutputDir "..\build\installer"
 #endif
 
+; 对外的版本号带 v，和 GitHub 的 tag 保持一致，也用在产物文件名上。
+;
+; 注意 [Setup] 里的 AppVersion 和 VersionInfoVersion **必须保持纯数字**
+; （VersionInfoVersion 只吃 n.n.n.n），所以那两个用 AppVersion，
+; 人眼看到的地方（文件名、AppVerName）才用带 v 的这个。
+#define AppVersionTag "v" + AppVersion
+
 #define AppName "ClipNote"
 #define AppExeName "ClipNote.exe"
 #define AppPublisher "ihehe1996"
@@ -30,7 +37,7 @@
 AppId={{A4BD1670-7CE8-40BC-88C5-2FAA807D5DCE}
 AppName={#AppName}
 AppVersion={#AppVersion}
-AppVerName={#AppName} {#AppVersion}
+AppVerName={#AppName} {#AppVersionTag}
 AppPublisher={#AppPublisher}
 AppPublisherURL={#AppUrl}
 AppSupportURL={#AppUrl}
@@ -48,7 +55,7 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 
 OutputDir={#OutputDir}
-OutputBaseFilename={#AppName}-{#AppVersion}-setup
+OutputBaseFilename={#AppName}-{#AppVersionTag}-setup
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
