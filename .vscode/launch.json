@@ -1,0 +1,32 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "调试 ClipNote (MinGW gdb)",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "${command:cmake.launchTargetPath}",
+      // 想看 qDebug() 的输出，把 --selftest 加进来跑一遍（结果落在 selftest.log），
+      // 或者临时把 CMakeLists.txt 里的 WIN32 去掉，重新配置构建
+      "args": [],
+      "stopAtEntry": false,
+      "cwd": "${workspaceFolder}",
+      "environment": [
+        {
+          "name": "PATH",
+          "value": "D:/Program Files/QT/6.8.3/mingw_64/bin;D:/Program Files/QT/Tools/mingw1310_64/bin;${env:PATH}"
+        }
+      ],
+      "externalConsole": false,
+      "MIMode": "gdb",
+      "miDebuggerPath": "D:/Program Files/QT/Tools/mingw1310_64/bin/gdb.exe",
+      "setupCommands": [
+        {
+          "description": "为 gdb 启用整齐打印",
+          "text": "-enable-pretty-printing",
+          "ignoreFailures": true
+        }
+      ]
+    }
+  ]
+}

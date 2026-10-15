@@ -1,0 +1,9 @@
+<RCC>
+    <qresource prefix="/">
+        <file>clipnote.png</file>
+        <!-- 自更新的收尾脚本模板。它不会被写成文件再执行：ClipNote 替换掉里面的
+             占位符、整段做 UTF-16LE+Base64，用 powershell -EncodedCommand 送过去。
+             详见 src/update/UpdateInstaller.cpp。 -->
+        <file>apply-update.ps1</file>
+    </qresource>
+</RCC>

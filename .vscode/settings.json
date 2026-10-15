@@ -1,0 +1,23 @@
+{
+  // ---- CMake Tools 插件：告诉它 cmake/ninja 在哪 ----
+  "cmake.cmakePath": "D:/Program Files/QT/Tools/CMake_64/bin/cmake.exe",
+  "cmake.generator": "Ninja",
+  "cmake.configureOnOpen": true,
+  "cmake.useCMakePresets": "always",
+
+  // ---- C/C++ 插件：IntelliSense 用哪个编译器、去哪找头文件 ----
+  "C_Cpp.default.compilerPath": "D:/Program Files/QT/Tools/mingw1310_64/bin/g++.exe",
+  "C_Cpp.default.cStandard": "c17",
+  "C_Cpp.default.cppStandard": "c++17",
+  "C_Cpp.default.intelliSenseMode": "windows-gcc-x64",
+  "C_Cpp.default.includePath": [
+    "${workspaceFolder}/**",
+    "D:/Program Files/QT/6.8.3/mingw_64/include/**"
+  ],
+
+  // 让自动补全跟上 Qt 的构建产物（moc/uic 生成的文件）
+  "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools",
+
+  "files.encoding": "utf8",
+  "files.eol": "\r\n"
+}

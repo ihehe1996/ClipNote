@@ -1,0 +1,17 @@
+{
+  "version": 4,
+  "configurations": [
+    {
+      "name": "Qt-MinGW",
+      "includePath": [
+        "${workspaceFolder}/**",
+        "D:/Program Files/QT/6.8.3/mingw_64/include/**"
+      ],
+      "compilerPath": "D:/Program Files/QT/Tools/mingw1310_64/bin/g++.exe",
+      "cStandard": "c17",
+      "cppStandard": "c++17",
+      "intelliSenseMode": "windows-gcc-x64",
+      "configurationProvider": "ms-vscode.cmake-tools"
+    }
+  ]
+}
