@@ -31,10 +31,10 @@ public:
     // 打开就查（除非调用方设了别的）
     void startCheck();
 
-signals:
-    // 一次检查跑完了。ok 说的是「这次检查本身成不成功」，和有没有新版本无关 ——
-    // 调用方靠它决定要不要更新「上次检查时间」来给下次静默检查节流。
-    void checked(bool ok);
+    // 直接展示一份**已经查好**的结果，不再发请求。
+    // 启动时那次静默检查是这么走的 —— 不然同一个问题要问 GitHub 两遍。
+    // 只在结果确实有新版本时调用，别的状态（已是最新/查失败）不该无端弹窗。
+    void showResult(const UpdateChecker::Result &result);
 
 protected:
     void reject() override;   // 下载中途关窗口要中止请求

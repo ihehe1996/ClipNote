@@ -48,14 +48,9 @@ public slots:
     // 齿轮菜单里的「检查更新…」。打开的对话框自己负责查和下载。
     void checkForUpdates();
 
-    // 启动时那一次静默检查。带节流（见 AppConfig.h 的 updateThrottleHours），
-    // 查到新版本只发信号，不自己弹窗 —— 弹气泡是托盘的事。
+    // 启动时那一次静默检查。每次启动都查（没有节流，理由见 AppConfig.h），
+    // 查到新版本直接把更新对话框摆出来。
     void startSilentUpdateCheck();
-
-signals:
-    // 静默检查查到了新版本。让 main.cpp 去转给托盘，面板不管托盘的事。
-    // 只带版本号：气泡上放不下更新说明，用户真要看的话打开对话框会重新查一遍。
-    void updateAvailable(const QString &version);
 
 protected:
     void closeEvent(QCloseEvent *event) override;
@@ -66,7 +61,6 @@ private:
     void updateEmptyState();
     void pasteRow(const QModelIndex &index);
     void showContextMenu(const QPoint &pos);
-    void rememberUpdateCheck();
 
     ClipStore *m_store = nullptr;
     ClipboardWatcher *m_watcher = nullptr;

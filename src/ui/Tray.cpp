@@ -45,9 +45,6 @@ Tray::Tray(QObject *parent) : QObject(parent)
                 if (reason == QSystemTrayIcon::Trigger)
                     emit toggleRequested();
             });
-
-    // 点气泡本体。Windows 上是气泡消失时触发。
-    connect(m_icon, &QSystemTrayIcon::messageClicked, this, &Tray::messageClicked);
 }
 
 Tray::~Tray()

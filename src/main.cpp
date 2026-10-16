@@ -18,8 +18,6 @@
 #include <QKeySequence>
 #include <QTimer>
 
-#include <memory>
-
 int main(int argc, char *argv[])
 {
     QApplication app(argc, argv);
@@ -83,31 +81,9 @@ int main(int argc, char *argv[])
                              .arg(shortcutText, hotkey.errorString()));
     }
 
-    // 启动时悄悄查一次更新（有节流，见 AppConfig.h）。
-    // 查到只弹个气泡，不弹对话框 —— 用户可能正在干别的，别打断他。
-    //
-    // notifiedWithUpdate 这个标志是用来区分「用户点的是哪个气泡」的：
-    // 热键注册失败也会弹气泡，那种时候点一下不该冒出更新对话框。
-    auto notifiedWithUpdate = std::make_shared<bool>(false);
-
-    QObject::connect(&window, &ClipNote::MainWindow::updateAvailable, &tray,
-                     [&tray, notifiedWithUpdate](const QString &version) {
-                         *notifiedWithUpdate = true;
-                         // 气泡上只放得下两行，说明白「点它就能装」就够了
-                         tray.showMessage(
-                             QStringLiteral("ClipNote 有新版本 %1").arg(version),
-                             QStringLiteral("当前是 %1。点这条消息可以下载并更新。")
-                                 .arg(QCoreApplication::applicationVersion()));
-                     });
-
-    QObject::connect(&tray, &ClipNote::Tray::messageClicked, &window,
-                     [&window, notifiedWithUpdate] {
-                         if (!*notifiedWithUpdate)
-                             return;
-                         *notifiedWithUpdate = false;
-                         window.checkForUpdates();
-                     });
-
+    // 启动时查一次更新。查到新版本由 MainWindow 直接把对话框摆出来
+    //（不再走托盘气泡 —— 系统通知会被关掉，而且失败时悄无声息）。
+    // 延迟这一会儿是为了别跟托盘、热键、面板抢时间。
     QTimer::singleShot(ClipNote::updateStartupDelayMs(), &window,
                        &ClipNote::MainWindow::startSilentUpdateCheck);
 

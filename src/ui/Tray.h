@@ -40,8 +40,6 @@ signals:
     void toggleRequested();
     void quitRequested();
     void checkUpdateRequested();
-    // 用户点了气泡消息本体（不是右键菜单）。用来把「发现新版本」的提示变成入口。
-    void messageClicked();
 
 private:
     QSystemTrayIcon *m_icon = nullptr;

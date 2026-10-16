@@ -229,12 +229,17 @@ void UpdateDialog::restart()
         startCheck();
 }
 
+void UpdateDialog::showResult(const UpdateChecker::Result &result)
+{
+    m_result = result;
+    m_asset = pickUpdateAsset(result.release);
+    applyState(State::Available);
+}
+
 void UpdateDialog::onCheckFinished(const UpdateChecker::Result &result)
 {
     m_result = result;
     m_asset = nullptr;
-
-    emit checked(result.ok);
 
     if (!result.ok) {
         m_retry = Retry::Check;

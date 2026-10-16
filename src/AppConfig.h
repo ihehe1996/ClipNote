@@ -74,11 +74,9 @@ inline QString updateRepo() { return QStringLiteral("ihehe1996/ClipNote"); }
 // 等一会儿是为了别和启动时的托盘、热键、面板抢时间，也不至于让冷启动更慢。
 inline int updateStartupDelayMs() { return 5000; }
 
-// 静默检查的节流：距上次检查不超过这么多小时就跳过。
-//
-// 「启动时查一次」听着很轻，但用户一天开十次程序就是十次请求。
-// GitHub 对未认证的 API 是每小时 60 次，而且这属于**白用别人的带宽**，
-// 所以哪怕只是个小工具也该有个节制。
-inline int updateThrottleHours() { return 12; }
+// 启动时的检查**没有**节流，每次启动都查一次。
+// 这里本来有个「距上次检查不到 N 小时就跳过」，去掉了：本程序是托盘常驻 + 开机自启，
+// 一次「启动」基本就是一次开机，频率本来就低；留着它只会让「刚重启完反而查不到更新」
+// 变成常态。真要省请求，省下的量一天也就几次，不值当。
 
 } // namespace ClipNote

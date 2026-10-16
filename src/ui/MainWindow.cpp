@@ -15,7 +15,6 @@
 #include <QClipboard>
 #include <QCloseEvent>
 #include <QCursor>
-#include <QDateTime>
 #include <QGuiApplication>
 #include <QImage>
 #include <QLabel>
@@ -23,7 +22,6 @@
 #include <QMenu>
 #include <QPainter>
 #include <QScreen>
-#include <QSettings>
 #include <QVBoxLayout>
 
 namespace ClipNote {
@@ -181,11 +179,6 @@ void MainWindow::hidePanel()
 void MainWindow::checkForUpdates()
 {
     UpdateDialog dialog(this);
-    // 手点的那次也算「查过了」，不然启动时那次静默检查会立刻再来一遍
-    connect(&dialog, &UpdateDialog::checked, this, [this](bool ok) {
-        if (ok)
-            rememberUpdateCheck();
-    });
     dialog.startCheck();
     dialog.exec();
 }
@@ -196,33 +189,24 @@ void MainWindow::startSilentUpdateCheck()
     if (updateRepo().isEmpty())
         return;
 
-    const QDateTime lastCheck =
-        QSettings().value(QStringLiteral("update/lastCheck")).toDateTime();
-    if (lastCheck.isValid()
-        && lastCheck.secsTo(QDateTime::currentDateTime()) < updateThrottleHours() * 3600) {
-        return;
-    }
-
     if (!m_silentChecker) {
         m_silentChecker = new UpdateChecker(this);
         connect(m_silentChecker, &UpdateChecker::checkFinished, this,
                 [this](const UpdateChecker::Result &result) {
-                    // 只在真查成功的时候记时间。失败（断网、被限流）不记 ——
-                    // 那种情况下节流会把「下次再试」也一起挡掉，用户就永远查不到了。
-                    if (!result.ok)
+                    // 只有真查到新版本才弹窗：查失败、已是最新都不该无端拦人。
+                    //
+                    // 这里不用托盘气泡 —— 气泡属于系统通知，用户能在系统设置里整个关掉、
+                    // 专注助手也会把它压掉，而且**失败时不报错**，那条路一断用户永远
+                    // 不知道有新版本。对话框是自己画的，一定会出现。
+                    if (!result.ok || !result.updateAvailable)
                         return;
-                    rememberUpdateCheck();
-                    if (result.updateAvailable)
-                        emit updateAvailable(result.latest.toString());
+                    UpdateDialog dialog(this);
+                    dialog.showResult(result);   // 结果现成的，别再查一遍
+                    dialog.exec();
                 });
     }
 
     m_silentChecker->check();
-}
-
-void MainWindow::rememberUpdateCheck()
-{
-    QSettings().setValue(QStringLiteral("update/lastCheck"), QDateTime::currentDateTime());
 }
 
 void MainWindow::pasteRow(const QModelIndex &index)
