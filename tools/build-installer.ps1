@@ -204,7 +204,8 @@ Write-Host "  暂存目录 $staged 个文件" -ForegroundColor DarkGray
 # 很容易把上一版的文件拖上去 —— 两个文件名只差一个数字，看走眼太正常了。
 if (Test-Path -LiteralPath $OutputDir) {
     Get-ChildItem -LiteralPath $OutputDir -File |
-        Where-Object { $_.Name -match '^ClipNote-.*(-setup\.exe|\.zip)$' } |
+        # setup 是改名前的旧后缀，留着是为了把更早那几轮的产物也清掉
+        Where-Object { $_.Name -match '^ClipNote-.*(-(setup|install)\.exe|\.zip)$' } |
         Remove-Item -Force
 }
 
@@ -222,7 +223,7 @@ Compress-Archive -Path (Join-Path $StagingDir "*") -DestinationPath $zipPath -Co
 # ---- 7. 汇报 ----
 Write-Host ""
 Write-Host "产物：" -ForegroundColor Green
-foreach ($artifact in @((Join-Path $OutputDir "ClipNote-v$version-setup.exe"), $zipPath)) {
+foreach ($artifact in @((Join-Path $OutputDir "ClipNote-v$version-install.exe"), $zipPath)) {
     if (Test-Path -LiteralPath $artifact) {
         $mb = [math]::Round((Get-Item -LiteralPath $artifact).Length / 1MB, 1)
         Write-Host ("  {0}  ({1} MB)" -f $artifact, $mb)

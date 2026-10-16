@@ -6,8 +6,6 @@
       "type": "cppdbg",
       "request": "launch",
       "program": "${command:cmake.launchTargetPath}",
-      // 想看 qDebug() 的输出，把 --selftest 加进来跑一遍（结果落在 selftest.log），
-      // 或者临时把 CMakeLists.txt 里的 WIN32 去掉，重新配置构建
       "args": [],
       "stopAtEntry": false,
       "cwd": "${workspaceFolder}",
@@ -26,7 +24,8 @@
           "text": "-enable-pretty-printing",
           "ignoreFailures": true
         }
-      ]
+      ],
+      "visualizerFile": "c:\\Users\\bs\\AppData\\Roaming\\Code\\User\\workspaceStorage\\90cef8a23c91143ed991331092d263ca\\tonka3000.qtvsctools\\qt.natvis.xml"
     }
   ]
 }

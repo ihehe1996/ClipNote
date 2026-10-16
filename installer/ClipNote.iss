@@ -55,7 +55,9 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 
 OutputDir={#OutputDir}
-OutputBaseFilename={#AppName}-{#AppVersionTag}-setup
+; 名字里带 install 也是给更新器看的：pickUpdateAsset() 会跳过 setup / install，
+; 免得它把安装程序当成主程序换上去。改这里要连着看 tools/build-installer.ps1。
+OutputBaseFilename={#AppName}-{#AppVersionTag}-install
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern

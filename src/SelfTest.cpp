@@ -428,13 +428,15 @@ int runSelfTest(const QStringList &arguments)
                                         : QStringLiteral("正确跳过，宁可不更新"))
                      : ignoredError);
 
-            // 两个都在时，挑的必须是便携 zip 而不是安装程序
+            // 两个都在时，挑的必须是便携 zip 而不是安装程序。
+            // 这条用的是现在的后缀 -install，上面那条用的是改名前的 -setup ——
+            // 两个拼写老 Release 里都有，都得跳过
             const QByteArray both = QByteArrayLiteral(R"({
               "tag_name": "v1.0.1",
               "html_url": "https://example.com",
               "assets": [
-                { "name": "ClipNote-1.0.1-setup.exe", "size": 3000000,
-                  "browser_download_url": "https://example.com/ClipNote-1.0.1-setup.exe" },
+                { "name": "ClipNote-1.0.1-install.exe", "size": 3000000,
+                  "browser_download_url": "https://example.com/ClipNote-1.0.1-install.exe" },
                 { "name": "ClipNote-1.0.1.zip", "size": 8000000,
                   "browser_download_url": "https://example.com/ClipNote-1.0.1.zip" }
               ]
