@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.21)
 #
 # 注意这里必须写纯数字：CMake 按 major.minor.patch 解析，写 "v1.0.0" 会报错。
 # 对外的 "v" 前缀在下面用编译期宏补上，见 CLIPNOTE_VERSION。
-project(ClipNote VERSION 1.0.1 LANGUAGES C CXX)
+project(ClipNote VERSION 1.0.2 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
