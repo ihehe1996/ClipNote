@@ -9,6 +9,7 @@
 #include "model/ClipStore.h"
 #include "model/ClipboardWatcher.h"
 #include "platform/GlobalHotkey.h"
+#include "ui/AppIcon.h"
 #include "ui/MainWindow.h"
 #include "ui/Tray.h"
 #include "update/UpdateInstaller.h"
@@ -27,6 +28,10 @@ int main(int argc, char *argv[])
     app.setOrganizationName(QStringLiteral("ClipNote"));
     // 版本号来自 CMakeLists.txt，改那一行就够了（见 AppConfig.h 的 appVersion）
     app.setApplicationVersion(ClipNote::appVersion());
+    // 「检查更新」和「关于」用的是系统标题栏，左上角那颗图标默认是 Windows 给的
+    // 空白图标 —— 设了应用程序图标它们才会跟着变。面板自己是自绘标题栏，用不到这个；
+    // 托盘图标另行设置（见 ui/Tray）。
+    app.setWindowIcon(ClipNote::appIcon());
 
     // 关掉最后一个窗口不等于退出 —— 托盘常驻的程序要活到用户主动退出
     app.setQuitOnLastWindowClosed(false);
