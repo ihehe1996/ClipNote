@@ -6,6 +6,7 @@
 #include "platform/AutoPaste.h"
 #include "ui/AboutDialog.h"
 #include "ui/ClipDelegate.h"
+#include "ui/PreviewPopup.h"
 #include "ui/TitleBar.h"
 #include "ui/UpdateDialog.h"
 #include "update/UpdateChecker.h"
@@ -20,11 +21,13 @@
 #include <QLabel>
 #include <QListView>
 #include <QMenu>
+#include <QMouseEvent>
 #include <QPainter>
 #include <QResizeEvent>
 #include <QScreen>
 #include <QSettings>
 #include <QTimer>
+#include <QToolTip>
 #include <QVBoxLayout>
 
 namespace ClipNote {
@@ -157,6 +160,15 @@ MainWindow::MainWindow(ClipStore *store, ClipboardWatcher *watcher, QWidget *par
     m_list->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(m_list, &QListView::customContextMenuRequested, this, &MainWindow::showContextMenu);
 
+    // 悬停预览。视图为了悬停高亮已经开了鼠标跟踪，所以 MouseMove 是有的；
+    // 但「鼠标在这一行里挪了挪」没有对应信号（entered() 只在换行时发），
+    // 得自己盯视口的事件，见 eventFilter()。
+    m_preview = new PreviewPopup(this);
+    m_previewTimer = new QTimer(this);
+    m_previewTimer->setSingleShot(true);
+    connect(m_previewTimer, &QTimer::timeout, this, &MainWindow::showPreview);
+    m_list->viewport()->installEventFilter(this);
+
     connect(m_store, &QAbstractItemModel::rowsInserted, this, &MainWindow::updateEmptyState);
     connect(m_store, &QAbstractItemModel::rowsRemoved, this, &MainWindow::updateEmptyState);
     connect(m_store, &QAbstractItemModel::modelReset, this, &MainWindow::updateEmptyState);
@@ -206,6 +218,12 @@ void MainWindow::showPanel()
 
 void MainWindow::hidePanel()
 {
+    hidePreview();
+    // 行号也要清掉：面板收起来再唤出时鼠标可能没动过，不清的话
+    // 那次 MouseMove 会被当成「还在原来那一格」而直接返回，预览就再也弹不出来了。
+    m_previewRow = -1;
+    m_previewOnThumb = false;
+
     hide();
 }
 
@@ -340,6 +358,90 @@ void MainWindow::paintEvent(QPaintEvent *)
     painter.setPen(QColor(0xCF, 0xCF, 0xCF));
     painter.setBrush(Qt::NoBrush);
     painter.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), 8, 8);
+}
+
+bool MainWindow::eventFilter(QObject *watched, QEvent *event)
+{
+    if (watched == m_list->viewport()) {
+        switch (event->type()) {
+        case QEvent::MouseMove:
+            updatePreviewFor(static_cast<QMouseEvent *>(event)->position().toPoint());
+            break;
+        case QEvent::ToolTip:
+            // 把 Qt 自动那个气泡吃掉，改由我们自己计时再弹（延迟见 AppConfig.h）。
+            // Qt 那套的延迟（约 0.7 秒）没有公开的调节接口，只能这样接管；
+            // **不能让两边都弹** —— 那样同一段文字会出来两次。
+            // 用的还是 QToolTip，气泡本身是原生的。
+            return true;
+        case QEvent::Leave:
+        case QEvent::Wheel:              // 滚过之后光标底下已经换了一条
+        case QEvent::MouseButtonPress:   // 按下去就是要粘贴，别再挡着
+            hidePreview();
+            break;
+        default:
+            break;
+        }
+    }
+    return QWidget::eventFilter(watched, event);
+}
+
+void MainWindow::updatePreviewFor(const QPoint &viewportPos)
+{
+    const QModelIndex index = m_list->indexAt(viewportPos);
+    const int row = index.isValid() ? index.row() : -1;
+    const bool onThumb =
+        index.isValid() && leadingRect(m_list->visualRect(index)).contains(viewportPos);
+
+    // 换了一条（或者进出缩略图那一小块）就把上一条的提示收掉
+    if (row != m_previewRow || onThumb != m_previewOnThumb)
+        hidePreview();
+
+    m_previewRow = row;
+    m_previewOnThumb = onThumb;
+
+    // 每动一下就重新计时：气泡是「停住不动」之后才出来的，一动就重新等 ——
+    // 和系统气泡一个脾气（Qt 自带的那个也会被鼠标移动收掉，不重新计时的话
+    // 用户手一抖气泡就再也回不来了）。
+    m_previewTimer->stop();
+    if (row < 0)
+        return;
+
+    if (m_store->data(index, ClipStore::KindRole).toInt() == int(Clip::Image)) {
+        // 图片只在左侧那个缩略图上弹。停在行的别处（比如缩略图右边那片空白）不弹 ——
+        // 不然鼠标横扫过一串图片时，屏幕上会一路冒大图。
+        if (onThumb)
+            m_previewTimer->start(imagePreviewDelayMs());
+    } else {
+        m_previewTimer->start(textPreviewDelayMs());
+    }
+}
+
+void MainWindow::showPreview()
+{
+    const QModelIndex index = m_store->index(m_previewRow);
+    if (!index.isValid())
+        return;
+
+    if (m_store->data(index, ClipStore::KindRole).toInt() == int(Clip::Image)) {
+        m_preview->showImage(m_store->data(index, ClipStore::ImageRole).value<QImage>());
+        // 摆在面板外侧、对着光标的高度。用光标而不是行矩形：面板自己不抢焦点，
+        // 光标才是「用户正看着哪儿」的唯一信号。
+        m_preview->showNextTo(this, QCursor::pos());
+        return;
+    }
+
+    // 文本用的是 Qt 原生的气泡（QToolTip），只是由我们决定什么时候弹。
+    // 显示什么由模型说了算：Qt::ToolTipRole 给的是全文。
+    const QString tip = m_store->data(index, Qt::ToolTipRole).toString();
+    if (!tip.isEmpty())
+        QToolTip::showText(QCursor::pos(), tip, m_list->viewport());
+}
+
+void MainWindow::hidePreview()
+{
+    m_previewTimer->stop();
+    m_preview->hide();
+    QToolTip::hideText();
 }
 
 void MainWindow::closeEvent(QCloseEvent *event)

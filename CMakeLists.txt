@@ -65,6 +65,9 @@ qt_add_executable(ClipNote WIN32
     src/ui/ClipDelegate.h
     src/ui/ClipDelegate.cpp
 
+    src/ui/PreviewPopup.h
+    src/ui/PreviewPopup.cpp
+
     src/ui/AboutDialog.h
     src/ui/AboutDialog.cpp
 

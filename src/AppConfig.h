@@ -43,6 +43,13 @@ inline bool autoPasteEnabled() { return true; }
 // 会沿用用户上次拖出来的大小（记在 QSettings 的 panel/size 里）。
 inline QSize defaultPanelSize() { return QSize(360, 440); }
 
+// 鼠标停住多久才弹悬停提示。鼠标一动就重新计时（和系统气泡一个脾气）。
+//
+// 图片短一些：鼠标是**故意**停在那个小缩略图上的，说明就是想看清楚，弹慢了耽误事。
+// 文本长一些（但也别太长）：文本整行都算，鼠标扫过列表时不该一路弹气泡。
+inline int imagePreviewDelayMs() { return 300; }
+inline int textPreviewDelayMs() { return 500; }
+
 // 面板能拖到多小。低于这个尺寸排版就开始坏了，两个方向各有各的下限：
 //
 //   宽度 —— 标题栏在约 170px 以下会把标题挤没、齿轮和关闭两颗按钮互压；

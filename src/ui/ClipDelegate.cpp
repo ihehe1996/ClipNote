@@ -93,6 +93,13 @@ void drawThumbnail(QPainter *painter, const QRectF &box, const QPixmap &thumb)
 
 } // namespace
 
+QRect leadingRect(const QRect &row)
+{
+    const int contentLeft = row.left() + kPadding + kAccentGutter;
+    return QRect(contentLeft, row.top() + (row.height() - kLeadingSize) / 2,
+                 kLeadingSize, kLeadingSize);
+}
+
 ClipDelegate::ClipDelegate(QObject *parent) : QStyledItemDelegate(parent) {}
 
 QSize ClipDelegate::sizeHint(const QStyleOptionViewItem &option, const QModelIndex &) const
@@ -129,9 +136,7 @@ void ClipDelegate::paint(QPainter *painter, const QStyleOptionViewItem &option,
         painter->drawRoundedRect(bar, 1.5, 1.5);
     }
 
-    const int contentLeft = row.left() + kPadding + kAccentGutter;
-    const QRect leading(contentLeft, row.top() + (row.height() - kLeadingSize) / 2,
-                        kLeadingSize, kLeadingSize);
+    const QRect leading = leadingRect(row);
 
     if (index.data(ClipStore::KindRole).toInt() == int(Clip::Image)) {
         drawThumbnail(painter, QRectF(leading), index.data(ClipStore::ThumbRole).value<QPixmap>());

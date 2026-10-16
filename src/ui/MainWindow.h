@@ -6,6 +6,7 @@
 #include <QWidget>
 
 QT_BEGIN_NAMESPACE
+class QEvent;
 class QLabel;
 class QListView;
 class QResizeEvent;
@@ -17,6 +18,7 @@ namespace ClipNote {
 class ClipStore;
 class ClipboardWatcher;
 class TitleBar;
+class PreviewPopup;
 class UpdateChecker;
 
 // 剪贴板面板。
@@ -62,12 +64,19 @@ protected:
     // 拖边缘改大小全靠原生消息，见 platform/WindowResizer.h
     bool nativeEvent(const QByteArray &eventType, void *message, qintptr *result) override;
     void resizeEvent(QResizeEvent *event) override;
+    // 悬停提示要盯着列表视口：视图本身没有「鼠标在这一格里挪了挪」这种信号
+    //（entered() 只在换行的时候发），而且 Qt 自动弹气泡的时机也要在这里接管
+    //（它的延迟没有公开接口，见 eventFilter 里的说明）。
+    bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
     void positionNearCursor();
     void updateEmptyState();
     void pasteRow(const QModelIndex &index);
     void showContextMenu(const QPoint &pos);
+    void updatePreviewFor(const QPoint &viewportPos);
+    void showPreview();
+    void hidePreview();
 
     ClipStore *m_store = nullptr;
     ClipboardWatcher *m_watcher = nullptr;
@@ -77,6 +86,12 @@ private:
     QLabel *m_empty = nullptr;
 
     WindowResizer m_resizer{this};   // 拖边缘改大小（无边框窗口得自己补回来）
+
+    // 悬停预览：文本停一会儿弹全文，图片停在缩略图上弹大图。
+    PreviewPopup *m_preview = nullptr;
+    QTimer *m_previewTimer = nullptr;
+    int m_previewRow = -1;          // 光标当前停在第几行，-1 = 不在任何一行上
+    bool m_previewOnThumb = false;  // 光标是不是正压在那一行的缩略图上
 
     // 尺寸变了要记进 QSettings，但拖动时 resizeEvent 是**每帧**一次，
     // 不能每帧都去写一遍注册表 —— 停手之后再落盘。

@@ -1,8 +1,15 @@
 #pragma once
 
+#include <QRect>
 #include <QStyledItemDelegate>
 
 namespace ClipNote {
+
+// 一行里左侧那块「类型区」的矩形：图片是缩略图，文本是那个段落字形。
+//
+// 画行的时候用它，列表判断「鼠标是不是压在这一小块上」的时候也用它 —— 悬停出大图
+// 预览只在缩略图上触发。两边各算一遍的话，改了留白就会对不上。
+QRect leadingRect(const QRect &row);
 
 // 剪贴板历史每一行的画法：左边一行内容（超出省略），右边一个灰掉的相对时间，
 // 鼠标悬停的行和「最近点过的那条」有圆角底色。

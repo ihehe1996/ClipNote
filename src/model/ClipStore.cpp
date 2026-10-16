@@ -62,8 +62,13 @@ QVariant ClipStore::data(const QModelIndex &index, int role) const
         return clip.kind == Clip::Image
                    ? QStringLiteral("图片  %1 × %2").arg(clip.image.width()).arg(clip.image.height())
                    : oneLine(clip.text);
+    // 「鼠标停住时显示什么」。文本给全文，由 MainWindow 交给 QToolTip 弹**原生气泡**
+    // —— 也只有这一处会给，两边都给就会弹两个（试过，同一段文字出来两次）。
+    //
+    // 图片返回空串是故意的：图片的悬停提示是那个自绘的「大图预览」
+    //（原生气泡塞不进位图），这里再给一句文字提示就会两个气泡打架。
     case Qt::ToolTipRole:
-        return clip.kind == Clip::Image ? QStringLiteral("图片，单击即粘贴") : clip.text;
+        return clip.kind == Clip::Image ? QString() : clip.text;
     case TextRole:
         return clip.text;
     case CapturedAtRole:
