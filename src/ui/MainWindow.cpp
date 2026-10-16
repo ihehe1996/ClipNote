@@ -1,6 +1,8 @@
 #include "ui/MainWindow.h"
 
 #include "AppConfig.h"
+#include "model/ClipFilterProxy.h"
+#include "model/ClipHistoryFile.h"
 #include "model/ClipStore.h"
 #include "model/ClipboardWatcher.h"
 #include "platform/AutoPaste.h"
@@ -17,6 +19,7 @@
 #include <QCloseEvent>
 #include <QCursor>
 #include <QGuiApplication>
+#include <QHBoxLayout>
 #include <QImage>
 #include <QLabel>
 #include <QListView>
@@ -26,6 +29,7 @@
 #include <QResizeEvent>
 #include <QScreen>
 #include <QSettings>
+#include <QTabBar>
 #include <QTimer>
 #include <QToolTip>
 #include <QVBoxLayout>
@@ -116,8 +120,12 @@ MainWindow::MainWindow(ClipStore *store, ClipboardWatcher *watcher, QWidget *par
         dialog.exec();
     });
 
+    // 视图挂的是**代理**：顶部两个选项卡靠它过滤。索引语义见下面 pasteRow() 上面那段。
+    m_proxy = new ClipFilterProxy(this);
+    m_proxy->setSourceModel(m_store);
+
     m_list = new QListView(this);
-    m_list->setModel(m_store);
+    m_list->setModel(m_proxy);
     m_list->setItemDelegate(new ClipDelegate(m_list));   // 每行的画法见 ClipDelegate
     m_list->setUniformItemSizes(true);
     m_list->setTextElideMode(Qt::ElideRight);
@@ -145,11 +153,36 @@ MainWindow::MainWindow(ClipStore *store, ClipboardWatcher *watcher, QWidget *par
     m_empty->setWordWrap(true);
     m_empty->setStyleSheet(QStringLiteral("color: #9a9a9a;"));
 
+    // 「历史记录 / 收藏」。放在 body 里而不是标题栏和 body 之间：它是白色内容区的
+    // 一部分，这样能直接继承 body 的白底和 6px 边距，不用自己再对一套配色。
+    m_tabs = new QTabBar(this);
+    m_tabs->setObjectName(QStringLiteral("clipNoteTabs"));
+    m_tabs->addTab(QStringLiteral("历史记录"));
+    m_tabs->addTab(QStringLiteral("收藏"));
+    // 面板收不到键盘，别让选项卡去抢焦点
+    m_tabs->setFocusPolicy(Qt::NoFocus);
+    m_tabs->setDrawBase(false);   // 不要那条贯穿整行的底线，只留选中项下面的
+    m_tabs->setExpanding(false);
+    m_tabs->setStyleSheet(QStringLiteral(
+        "QTabBar#clipNoteTabs { background: transparent; }"
+        "QTabBar#clipNoteTabs::tab { background: transparent; border: none;"
+        "                              padding: 5px 2px; margin-right: 16px; color: #6b6b6b; }"
+        "QTabBar#clipNoteTabs::tab:selected { color: #1f1f1f;"
+        "                                     border-bottom: 2px solid #2F6FED; }"
+        "QTabBar#clipNoteTabs::tab:hover:!selected { color: #3a3a3a; }"));
+
     auto *body = new QWidget(this);
     body->setObjectName(QStringLiteral("clipNoteBody"));
     body->setStyleSheet(QStringLiteral("QWidget#clipNoteBody { background: #ffffff; }"));
     auto *bodyLayout = new QVBoxLayout(body);
     bodyLayout->setContentsMargins(6, 6, 6, 6);
+    // 选项卡居中。QTabBar 自己只会左对齐，两侧各放一个弹簧把它顶到中间 ——
+    // 别改用 setExpanding(true)，那是把每个选项卡**拉宽**铺满整行，不是居中。
+    auto *tabRow = new QHBoxLayout;
+    tabRow->addStretch(1);
+    tabRow->addWidget(m_tabs);
+    tabRow->addStretch(1);
+    bodyLayout->addLayout(tabRow);
     bodyLayout->addWidget(m_empty, 1);
     bodyLayout->addWidget(m_list, 1);
 
@@ -175,9 +208,28 @@ MainWindow::MainWindow(ClipStore *store, ClipboardWatcher *watcher, QWidget *par
     connect(m_previewTimer, &QTimer::timeout, this, &MainWindow::showPreview);
     m_list->viewport()->installEventFilter(this);
 
-    connect(m_store, &QAbstractItemModel::rowsInserted, this, &MainWindow::updateEmptyState);
-    connect(m_store, &QAbstractItemModel::rowsRemoved, this, &MainWindow::updateEmptyState);
-    connect(m_store, &QAbstractItemModel::modelReset, this, &MainWindow::updateEmptyState);
+    connect(m_tabs, &QTabBar::currentChanged, this, &MainWindow::onTabChanged);
+
+    // 空状态接的是**代理**的信号，不是源模型的：接源模型的话，源一发信号就可能先跑到
+    // 这里，而代理内部的行数映射还没更新，读到的 rowCount 是旧的。
+    connect(m_proxy, &QAbstractItemModel::rowsInserted, this, &MainWindow::updateEmptyState);
+    connect(m_proxy, &QAbstractItemModel::rowsRemoved, this, &MainWindow::updateEmptyState);
+    connect(m_proxy, &QAbstractItemModel::modelReset, this, &MainWindow::updateEmptyState);
+
+    // 历史落盘：模型变了就重启定时器，停手 1 秒才写。接的是**源模型** ——
+    // 落盘关心的是全部历史，跟当前在看哪个选项卡无关。
+    m_saveHistoryTimer = new QTimer(this);
+    m_saveHistoryTimer->setSingleShot(true);
+    m_saveHistoryTimer->setInterval(historySaveDelayMs());
+    connect(m_saveHistoryTimer, &QTimer::timeout, this, [this] {
+        QString error;
+        saveHistory(historyFilePath(), *m_store, &error);
+    });
+
+    connect(m_store, &QAbstractItemModel::rowsInserted, this, &MainWindow::scheduleHistorySave);
+    connect(m_store, &QAbstractItemModel::rowsRemoved, this, &MainWindow::scheduleHistorySave);
+    connect(m_store, &QAbstractItemModel::modelReset, this, &MainWindow::scheduleHistorySave);
+    connect(m_store, &QAbstractItemModel::dataChanged, this, &MainWindow::scheduleHistorySave);
 
     // 刻意**没有**「点面板外面就收起」。
     //
@@ -225,9 +277,9 @@ void MainWindow::showPanel()
 void MainWindow::hidePanel()
 {
     hidePreview();
-    // 行号也要清掉：面板收起来再唤出时鼠标可能没动过，不清的话
+    // 索引也要清掉：面板收起来再唤出时鼠标可能没动过，不清的话
     // 那次 MouseMove 会被当成「还在原来那一格」而直接返回，预览就再也弹不出来了。
-    m_previewRow = -1;
+    m_previewIndex = QPersistentModelIndex();
     m_previewOnThumb = false;
 
     hide();
@@ -266,6 +318,17 @@ void MainWindow::startSilentUpdateCheck()
     m_silentChecker->check();
 }
 
+// 索引语义（加了过滤代理之后，这块是最容易错的地方）：
+//
+//   视图吐出来的 index —— clicked 的参数、indexAt()、visualRect() 的入参 ——
+//   **一律是代理索引**。取数据可以直接 index.data(...)，代理会自动转发到源模型。
+//
+//   **千万别写 m_store->data(代理索引)**：它不做映射，会把代理行号当源行号用。
+//   历史页不过滤、行号恰好重合，看着一切正常；一切到收藏页就静默取错条目 ——
+//   不崩、不报错，预览显示成另一条的、右键删除删掉另一条。
+//
+//   反过来，凡是喂给源模型的行号（removeAt / setFavorite / isFavorite）必须走
+//   m_proxy->mapToSource(index).row()。
 void MainWindow::pasteRow(const QModelIndex &index)
 {
     if (!index.isValid())
@@ -303,24 +366,54 @@ void MainWindow::pasteRow(const QModelIndex &index)
 
 void MainWindow::showContextMenu(const QPoint &pos)
 {
-    const QModelIndex index = m_list->indexAt(pos);
+    // 持久索引：menu.exec() 是模态的，但**它会跑事件循环**，其间剪贴板推进来一条
+    // 新内容就可能把源模型重排掉，裸 QModelIndex 会失效，回来再删就删错行了。
+    const QPersistentModelIndex index = m_list->indexAt(pos);
 
     QMenu menu;
-    // 点在空白处就没有「这一条」可删，只给清空
-    QAction *removeAction = index.isValid()
-                                ? menu.addAction(QStringLiteral("删除这一条"))
-                                : nullptr;
-    QAction *clearAction = menu.addAction(QStringLiteral("清空全部历史"));
+    QAction *favoriteAction = nullptr;
+    QAction *removeAction = nullptr;
+    QAction *clearAction = nullptr;
+    QAction *unfavoriteAllAction = nullptr;
+
+    if (index.isValid()) {
+        // 点在条目上：只给和「这一条」有关的动作，**不出现清空**
+        favoriteAction = menu.addAction(index.data(ClipStore::FavoriteRole).toBool()
+                                            ? QStringLiteral("取消收藏")
+                                            : QStringLiteral("收藏"));
+        removeAction = menu.addAction(QStringLiteral("删除这一条"));
+    } else {
+        // 点在空白处。清空保留收藏 —— 收藏是特意留下来的东西，被一刀切掉就没意义了。
+        clearAction = menu.addAction(QStringLiteral("清空历史（保留收藏）"));
+        unfavoriteAllAction = menu.addAction(QStringLiteral("取消全部收藏"));
+    }
 
     QAction *chosen = menu.exec(m_list->viewport()->mapToGlobal(pos));
-
     if (!chosen)
         return;
 
-    if (chosen == removeAction)
-        m_store->removeAt(index.row());
-    else if (chosen == clearAction)
-        m_store->clear();
+    // 菜单关掉之后那个索引可能已经失效（见上面那条注释），映射成源行号之前再确认一次
+    const QModelIndex source = index.isValid() ? m_proxy->mapToSource(index) : QModelIndex();
+
+    if (chosen == favoriteAction) {
+        if (source.isValid())
+            m_store->setFavorite(source.row(), !m_store->isFavorite(source.row()));
+        // 在收藏页取消收藏，这一行得立刻从列表里消失 —— 代理不会自己重评估。
+        // 放在 dataChanged 的槽里做会重入，所以由调用方显式刷。
+        m_proxy->refresh();
+        // refresh() 到底发 rowsRemoved 还是只有 layoutChanged 不值得赌，
+        // 而空状态是靠那些信号更新的 —— 取消掉收藏页最后一条时要能切到空状态文案
+        updateEmptyState();
+    } else if (chosen == removeAction) {
+        if (source.isValid())
+            m_store->removeAt(source.row());
+    } else if (chosen == clearAction) {
+        m_store->clearHistory();
+    } else if (chosen == unfavoriteAllAction) {
+        m_store->clearFavorites();
+    }
+
+    hidePreview();   // 删完/清完，光标底下可能已经不是刚才那一条了
 }
 
 void MainWindow::positionNearCursor()
@@ -345,13 +438,56 @@ void MainWindow::positionNearCursor()
 
 void MainWindow::updateEmptyState()
 {
-    const bool hasRows = m_store->rowCount() > 0;
+    // 问**代理**：空不空要按当前选项卡算，历史页有东西不代表收藏页也有
+    const bool hasRows = m_proxy->rowCount() > 0;
 
     m_list->setVisible(hasRows);
     m_empty->setVisible(!hasRows);
 
-    if (!hasRows)
-        m_empty->setText(QStringLiteral("还没有剪贴板历史。\n\n复制点什么，这里就会出现。"));
+    if (!hasRows) {
+        m_empty->setText(m_proxy->mode() == ClipFilterProxy::Favorites
+                             ? QStringLiteral("还没有收藏。\n\n点每条右边的星星把它收进来。")
+                             : QStringLiteral("还没有剪贴板历史。\n\n复制点什么，这里就会出现。"));
+    }
+}
+
+void MainWindow::onTabChanged(int tabIndex)
+{
+    m_proxy->setMode(tabIndex == 1 ? ClipFilterProxy::Favorites : ClipFilterProxy::History);
+
+    // 切页必须把这些状态一起清掉，否则会出现「这一页根本没点过的高亮」这种东西：
+    //   - 预览：计时器可能正为一条马上要被过滤掉的行计时，到点就会弹一条不在当前页的
+    //   - 选中项：新页里恰好在的条目会顶着上一页留下的高亮，还带出左边那条蓝竖条
+    //   - 滚动位置：条目变少后旧的像素偏移可能已经越过内容高度
+    hidePreview();
+    m_previewIndex = QPersistentModelIndex();
+    m_previewOnThumb = false;
+    m_list->clearSelection();
+    m_list->setCurrentIndex(QModelIndex());
+    m_list->scrollToTop();
+
+    // invalidateFilter() 到底发 modelReset 还是 layoutChanged 不值得赌，直接自己刷一遍
+    updateEmptyState();
+}
+
+void MainWindow::toggleFavorite(const QModelIndex &proxyIndex)
+{
+    const QModelIndex source = m_proxy->mapToSource(proxyIndex);
+    if (!source.isValid())
+        return;
+
+    const int row = source.row();
+    m_store->setFavorite(row, !m_store->isFavorite(row));
+
+    // 在收藏页取消收藏，那一行必须立刻消失；代理不会自己重评估这一行。
+    // 不能放在 dataChanged 的槽里做 —— 那是在源信号发出过程中重入。
+    m_proxy->refresh();
+    updateEmptyState();   // 同上：取消掉最后一条收藏时要切到空状态文案
+}
+
+void MainWindow::scheduleHistorySave()
+{
+    m_saveHistoryTimer->start();
 }
 
 void MainWindow::paintEvent(QPaintEvent *)
@@ -379,9 +515,58 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
             // **不能让两边都弹** —— 那样同一段文字会出来两次。
             // 用的还是 QToolTip，气泡本身是原生的。
             return true;
+
+        // 点星星不能顺带粘贴，而 QListView::clicked 只带 index **不带坐标**，
+        // 没法在它里面区分「点星星」和「点整行」。坐标只有这里拿得到，所以拦在这儿。
+        case QEvent::MouseButtonPress: {
+            auto *mouse = static_cast<QMouseEvent *>(event);
+            const QPoint pos = mouse->position().toPoint();
+            const QModelIndex index = m_list->indexAt(pos);
+            if (mouse->button() == Qt::LeftButton && index.isValid()
+                && starHitRect(m_list->visualRect(index)).contains(pos)) {
+                m_starPressed = true;
+                m_starIndex = index;   // 持久索引：重排/过滤后自动失效，不会误伤别行
+                hidePreview();
+                // 吃掉 press：视图就没记下 pressedIndex，抬起时自然不发 clicked
+                return true;
+            }
+            hidePreview();   // 别的按下：就是准备粘贴，先把气泡收掉
+            break;
+        }
+
+        case QEvent::MouseButtonRelease: {
+            if (!m_starPressed)
+                break;   // 不是星星手势，放行给视图（正常粘贴走这条路）
+            auto *mouse = static_cast<QMouseEvent *>(event);
+            const QPoint pos = mouse->position().toPoint();
+
+            // 只有抬起时仍在**同一颗**星星上才算数：
+            // 「按下在星上、拖到别处再松开」应该是什么都不发生。
+            if (m_starIndex.isValid()
+                && starHitRect(m_list->visualRect(m_starIndex)).contains(pos)) {
+                toggleFavorite(m_starIndex);
+            }
+            m_starPressed = false;
+            m_starIndex = QPersistentModelIndex();
+            hidePreview();
+            // **无论如何都吃掉**，这不是求稳而是这里真的会错：在收藏页点星星取消收藏，
+            // 那一行当场被过滤掉，抬起时坐标底下已经换成另一行了 ——
+            // 漏给视图就会把另一条粘贴出去。
+            return true;
+        }
+
+        case QEvent::MouseButtonDblClick: {
+            // 连着点两下星星时，第二次按下是 DblClick 而不是 Press，不吃就会漏给视图
+            auto *mouse = static_cast<QMouseEvent *>(event);
+            const QPoint pos = mouse->position().toPoint();
+            const QModelIndex index = m_list->indexAt(pos);
+            if (index.isValid() && starHitRect(m_list->visualRect(index)).contains(pos))
+                return true;
+            break;
+        }
+
         case QEvent::Leave:
-        case QEvent::Wheel:              // 滚过之后光标底下已经换了一条
-        case QEvent::MouseButtonPress:   // 按下去就是要粘贴，别再挡着
+        case QEvent::Wheel:      // 滚过之后光标底下已经换了一条
             hidePreview();
             break;
         default:
@@ -394,25 +579,26 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 void MainWindow::updatePreviewFor(const QPoint &viewportPos)
 {
     const QModelIndex index = m_list->indexAt(viewportPos);
-    const int row = index.isValid() ? index.row() : -1;
-    const bool onThumb =
-        index.isValid() && leadingRect(m_list->visualRect(index)).contains(viewportPos);
+    const bool valid = index.isValid();
+    const bool onThumb = valid && leadingRect(m_list->visualRect(index)).contains(viewportPos);
 
-    // 换了一条（或者进出缩略图那一小块）就把上一条的提示收掉
-    if (row != m_previewRow || onThumb != m_previewOnThumb)
+    // 换了一条（或者进出缩略图那一小块）就把上一条的提示收掉。
+    // 比的是持久索引，不是行号 —— 收藏页里取消一次收藏，后面所有条目的行号都会变。
+    if (index != m_previewIndex || onThumb != m_previewOnThumb)
         hidePreview();
 
-    m_previewRow = row;
+    m_previewIndex = index;
     m_previewOnThumb = onThumb;
 
     // 每动一下就重新计时：气泡是「停住不动」之后才出来的，一动就重新等 ——
     // 和系统气泡一个脾气（Qt 自带的那个也会被鼠标移动收掉，不重新计时的话
     // 用户手一抖气泡就再也回不来了）。
     m_previewTimer->stop();
-    if (row < 0)
+    if (!valid)
         return;
 
-    if (m_store->data(index, ClipStore::KindRole).toInt() == int(Clip::Image)) {
+    // index 是代理索引，取数据也走代理（见 pasteRow 上面那段索引语义）
+    if (index.data(ClipStore::KindRole).toInt() == int(Clip::Image)) {
         // 图片只在左侧那个缩略图上弹。停在行的别处（比如缩略图右边那片空白）不弹 ——
         // 不然鼠标横扫过一串图片时，屏幕上会一路冒大图。
         if (onThumb)
@@ -424,12 +610,15 @@ void MainWindow::updatePreviewFor(const QPoint &viewportPos)
 
 void MainWindow::showPreview()
 {
-    const QModelIndex index = m_store->index(m_previewRow);
-    if (!index.isValid())
+    // 持久索引在这里自查：计时器启动之后这一行可能已经被删掉、被重排、或者
+    // 在收藏页被过滤掉了 —— 那种情况下它就是无效的，直接不弹。
+    if (!m_previewIndex.isValid())
         return;
 
-    if (m_store->data(index, ClipStore::KindRole).toInt() == int(Clip::Image)) {
-        m_preview->showImage(m_store->data(index, ClipStore::ImageRole).value<QImage>());
+    const QModelIndex index = m_previewIndex;
+
+    if (index.data(ClipStore::KindRole).toInt() == int(Clip::Image)) {
+        m_preview->showImage(index.data(ClipStore::ImageRole).value<QImage>());
         // 摆在面板外侧、对着光标的高度。用光标而不是行矩形：面板自己不抢焦点，
         // 光标才是「用户正看着哪儿」的唯一信号。
         m_preview->showNextTo(this, QCursor::pos());
@@ -438,7 +627,7 @@ void MainWindow::showPreview()
 
     // 文本用的是 Qt 原生的气泡（QToolTip），只是由我们决定什么时候弹。
     // 显示什么由模型说了算：Qt::ToolTipRole 给的是全文。
-    const QString tip = m_store->data(index, Qt::ToolTipRole).toString();
+    const QString tip = index.data(Qt::ToolTipRole).toString();
     if (!tip.isEmpty())
         QToolTip::showText(QCursor::pos(), tip, m_list->viewport());
 }

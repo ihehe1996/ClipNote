@@ -1,6 +1,8 @@
 #include "SelfTest.h"
 
 #include "AppConfig.h"
+#include "model/ClipFilterProxy.h"
+#include "model/ClipHistoryFile.h"
 #include "model/ClipStore.h"
 #include "model/ClipboardWatcher.h"
 #include "platform/GlobalHotkey.h"
@@ -253,6 +255,179 @@ int runSelfTest(const QStringList &arguments)
               QStringLiteral("共 %1 条，发了 %2 次信号").arg(editable.rowCount()).arg(removeSignals));
     }
 
+    // 6b. 收藏。收藏项有两条特殊待遇（不受上限影响、不被「清空历史」清掉），
+    //     而且有两个很容易写漏的地方：重复推送会把收藏冲掉、以及过滤代理的索引映射。
+    {
+        ClipStore store;
+        store.pushText(QStringLiteral("A"));
+        store.pushText(QStringLiteral("B"));
+        store.pushText(QStringLiteral("C"));   // 列表是 C, B, A
+
+        store.setFavorite(1, true);            // 收藏 B
+        check(QStringLiteral("收藏：标记能设上，也能读回来"),
+              store.isFavorite(1) && !store.isFavorite(0) && !store.isFavorite(2)
+                  && store.data(store.index(1, 0), ClipStore::FavoriteRole).toBool(),
+              QStringLiteral("第 1 条收藏=%1").arg(store.isFavorite(1)));
+
+        // 这个坑很隐蔽：pushText 发现重复内容时是**新建**一个 Clip 再置顶的，
+        // 不把旧的收藏标记抄过去，「收藏过的内容再复制一次」收藏就悄悄没了。
+        store.pushText(QStringLiteral("B"));
+        check(QStringLiteral("收藏：重复复制不会把收藏标记冲掉"),
+              store.isFavorite(0) && store.textAt(0) == QStringLiteral("B"),
+              QStringLiteral("B 又推了一次，置顶后收藏=%1").arg(store.isFavorite(0)));
+
+        // 上限只管非收藏的：灌到超过 kMaxItems 之后收藏的一条都不能少
+        ClipStore capped;
+        capped.pushText(QStringLiteral("收藏的"));
+        capped.setFavorite(0, true);
+        for (int i = 0; i < ClipStore::kMaxItems + 20; ++i)
+            capped.pushText(QStringLiteral("clip-%1").arg(i));
+
+        // 收藏那条是最早推的，被一次次置顶挤到最旧的末尾；截断只丢非收藏的，
+        // 所以它最后应该稳稳待在最后一行。总条数 = 上限 + 收藏的 1 条。
+        const int favoriteRow = capped.rowCount() - 1;
+        check(QStringLiteral("收藏：不受 200 条上限影响，被挤到最旧的末尾也留着"),
+              capped.rowCount() == ClipStore::kMaxItems + 1
+                  && capped.textAt(favoriteRow) == QStringLiteral("收藏的")
+                  && capped.isFavorite(favoriteRow),
+              QStringLiteral("共 %1 条（上限 %2），最后一条是「%3」收藏=%4")
+                  .arg(capped.rowCount()).arg(ClipStore::kMaxItems)
+                  .arg(capped.textAt(favoriteRow)).arg(capped.isFavorite(favoriteRow)));
+
+        // 「清空历史（保留收藏）」只清非收藏的
+        ClipStore mixed;
+        mixed.pushText(QStringLiteral("普通一"));
+        mixed.pushText(QStringLiteral("收藏的"));
+        mixed.setFavorite(0, true);            // 现在是 收藏的, 普通一
+        mixed.pushText(QStringLiteral("普通二"));
+        mixed.clearHistory();
+        check(QStringLiteral("收藏：清空历史保留收藏"),
+              mixed.rowCount() == 1 && mixed.textAt(0) == QStringLiteral("收藏的"),
+              QStringLiteral("清完剩 %1 条：「%2」").arg(mixed.rowCount()).arg(mixed.textAt(0)));
+
+        // 「取消全部收藏」只取消标记，不删条目
+        const int beforeUnfavorite = mixed.rowCount();
+        mixed.clearFavorites();
+        check(QStringLiteral("收藏：取消全部收藏只是取消标记，不删条目"),
+              mixed.rowCount() == beforeUnfavorite && !mixed.isFavorite(0),
+              QStringLiteral("条数 %1 → %2，第 0 条收藏=%3")
+                  .arg(beforeUnfavorite).arg(mixed.rowCount()).arg(mixed.isFavorite(0)));
+    }
+
+    // 6c. 过滤代理的索引映射。**这是整套里最要紧的一条**：视图挂的是代理，
+    //     把代理索引当成源行号用不会崩、不会报错 —— 历史页行号恰好重合看着还正常，
+    //     一切到收藏页就静默取错条目。这里把映射关系钉死。
+    {
+        ClipStore store;
+        store.pushText(QStringLiteral("第0条"));
+        store.pushText(QStringLiteral("第1条"));
+        store.pushText(QStringLiteral("第2条"));
+        store.pushText(QStringLiteral("第3条"));   // 列表：3, 2, 1, 0
+
+        store.setFavorite(3, true);                // 收藏「第0条」（在最底下）
+        store.setFavorite(1, true);                // 收藏「第2条」
+
+        ClipFilterProxy proxy;
+        proxy.setSourceModel(&store);
+
+        const int allRows = proxy.rowCount();
+        proxy.setMode(ClipFilterProxy::Favorites);
+        const int favRows = proxy.rowCount();
+
+        const QModelIndex first = proxy.index(0, 0);
+        const QModelIndex second = proxy.index(1, 0);
+        const int firstSource = proxy.mapToSource(first).row();
+        const int secondSource = proxy.mapToSource(second).row();
+
+        check(QStringLiteral("收藏页：只剩收藏的，且顺序和源一致"),
+              allRows == 4 && favRows == 2 && firstSource == 1 && secondSource == 3,
+              QStringLiteral("历史页 %1 条，收藏页 %2 条，映射到源的第 %3、%4 条")
+                  .arg(allRows).arg(favRows).arg(firstSource).arg(secondSource));
+
+        // 关键断言：**通过代理取数据**必须拿到那一行自己的内容。
+        // 要是代码里写成 m_store->data(代理索引)，这里就会取到源里第 0 条。
+        const QString viaProxy = proxy.data(first, ClipStore::TextRole).toString();
+        const QString viaSource = store.textAt(firstSource);
+        check(QStringLiteral("收藏页：经代理取到的正是那一行的内容（不是按代理行号去源里瞎取）"),
+              viaProxy == viaSource && viaProxy == QStringLiteral("第2条"),
+              QStringLiteral("代理取到「%1」，源的第 %2 条是「%3」")
+                  .arg(viaProxy).arg(firstSource).arg(viaSource));
+
+        // 取消收藏之后重新过滤，那一行应当从收藏页消失
+        store.setFavorite(firstSource, false);
+        proxy.refresh();
+        check(QStringLiteral("收藏页：取消收藏后刷新，那一行立刻消失"),
+              proxy.rowCount() == 1 && proxy.mapToSource(proxy.index(0, 0)).row() == 3,
+              QStringLiteral("刷新后剩 %1 条").arg(proxy.rowCount()));
+    }
+
+    // 6d. 历史落盘。走真实文件（写在 %TEMP% 下一个自己的目录里，用完删掉），
+    //     验的是「写出去再读回来，内容/顺序/收藏/时间戳都对得上」。
+    {
+        ClipStore original;
+        original.pushText(QStringLiteral("落盘甲\n第二行"));
+        original.pushText(QStringLiteral("落盘乙"));
+        original.setFavorite(1, true);
+
+        const QString dir = QDir(QDir::temp().filePath(QStringLiteral("ClipNote-selftest-history")))
+                                .absolutePath();
+        QDir().mkpath(dir);
+        const QString path = QDir(dir).filePath(QStringLiteral("history.json"));
+
+        QString error;
+        const bool saved = saveHistory(path, original, &error);
+        ClipStore restored;
+        const bool loaded = saved && loadHistory(path, &restored, &error);
+
+        const bool same = loaded && restored.rowCount() == original.rowCount()
+                          && restored.textAt(0) == QStringLiteral("落盘乙")
+                          && restored.textAt(1) == QStringLiteral("落盘甲\n第二行")
+                          && restored.isFavorite(1)   // 收藏的是第 1 条（老的「落盘甲」）
+                          && restored.data(restored.index(1, 0), ClipStore::CapturedAtRole)
+                                 .toDateTime()
+                                 .toSecsSinceEpoch()
+                                 == original.data(original.index(1, 0), ClipStore::CapturedAtRole)
+                                        .toDateTime()
+                                        .toSecsSinceEpoch();
+
+        check(QStringLiteral("落盘：写出去再读回来，内容/顺序/收藏/时间戳都对得上"),
+              same,
+              loaded ? QStringLiteral("共 %1 条，第 0 条「%2」收藏=%3")
+                           .arg(restored.rowCount()).arg(restored.textAt(0)).arg(restored.isFavorite(0))
+                     : QStringLiteral("失败：%1").arg(error));
+
+        // 图片不该进文件：它不落盘（截图随时能重截，塞进磁盘不值当）。
+        // ClipStore 是 QObject，不能拷贝构造，所以重新灌一个。
+        ClipStore withPic;
+        QImage pic(20, 20, QImage::Format_ARGB32);
+        pic.fill(Qt::green);
+        withPic.pushImage(pic);
+        withPic.pushText(QStringLiteral("落盘甲"));
+        saveHistory(path, withPic, &error);
+
+        ClipStore reloaded;
+        loadHistory(path, &reloaded, &error);
+        QFile dump(path);
+        dump.open(QIODevice::ReadOnly);
+        const QByteArray raw = dump.readAll();
+        dump.close();
+        check(QStringLiteral("落盘：图片不写进文件（读回来只剩文本那条）"),
+              reloaded.rowCount() == 1 && reloaded.textAt(0) == QStringLiteral("落盘甲")
+                  && !raw.contains("base64"),
+              QStringLiteral("源 %1 条 → 读回 %2 条，文件 %3 字节")
+                  .arg(withPic.rowCount()).arg(reloaded.rowCount()).arg(raw.size()));
+
+        // 文件不在 → 当空历史，不报错、不崩
+        ClipStore fresh;
+        const bool missing = loadHistory(QDir(dir).filePath(QStringLiteral("没有这个文件.json")),
+                                         &fresh, &error);
+        check(QStringLiteral("落盘：历史文件不存在时当空历史启动"),
+              !missing && fresh.rowCount() == 0,
+              QStringLiteral("返回 %1，条数 %2").arg(missing).arg(fresh.rowCount()));
+
+        QDir(dir).removeRecursively();
+    }
+
     // 7. 「点条目写回剪贴板」不该让历史重排。
     //    这条要走真实剪贴板（dataChanged 是同步发的，不用转事件循环），
     //    所以放在上面剪贴板往返检查之后，写完照样还原用户原来的内容。
@@ -265,7 +440,8 @@ int runSelfTest(const QStringList &arguments)
             const QString saved = clipboard->text();
 
             // watcher 构造时会把当前剪贴板内容先收进来，清掉才好在确定的起点上断言
-            store.clear();
+            //（这里没有收藏项，clearHistory 等价于清空）
+            store.clearHistory();
 
             store.pushText(QStringLiteral("第一条"));
             store.pushText(QStringLiteral("第二条"));

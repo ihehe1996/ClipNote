@@ -50,6 +50,11 @@ inline QSize defaultPanelSize() { return QSize(360, 440); }
 inline int imagePreviewDelayMs() { return 300; }
 inline int textPreviewDelayMs() { return 500; }
 
+// 历史落盘的防抖：模型变了之后等这么久没有新变化才真写盘。
+// 不防抖的话每复制一次就写一遍文件 —— 一次 Ctrl+C 写一次还勉强能接受，
+// 但置顶/去重/截断会连着发好几个模型信号，那就是同一瞬间写好几次。
+inline int historySaveDelayMs() { return 1000; }
+
 // 面板能拖到多小。低于这个尺寸排版就开始坏了，两个方向各有各的下限：
 //
 //   宽度 —— 标题栏在约 170px 以下会把标题挤没、齿轮和关闭两颗按钮互压；

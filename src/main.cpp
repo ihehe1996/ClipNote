@@ -6,6 +6,7 @@
 
 #include "AppConfig.h"
 #include "SelfTest.h"
+#include "model/ClipHistoryFile.h"
 #include "model/ClipStore.h"
 #include "model/ClipboardWatcher.h"
 #include "platform/GlobalHotkey.h"
@@ -44,6 +45,22 @@ int main(int argc, char *argv[])
     ClipNote::UpdateInstaller::cleanStaleWorkDirs();
 
     ClipNote::ClipStore store;
+
+    // 先把上次的历史装回来，**再**建 watcher：watcher 构造时会采样一次当前剪贴板，
+    // 那是要的 —— 你最后复制的东西本来就该在最前面；要是它已经在历史里，
+    // pushText 会去重并置顶，不会多出一条。
+    // 读失败（第一次跑、文件坏了）就当空历史启动，不打扰用户。
+    {
+        QString error;
+        ClipNote::loadHistory(ClipNote::historyFilePath(), &store, &error);
+    }
+
+    // 退出前补存一次：写盘是防抖的，刚复制完就退出的话定时器还没到点，那条就丢了。
+    QObject::connect(&app, &QCoreApplication::aboutToQuit, &app, [&store] {
+        QString error;
+        ClipNote::saveHistory(ClipNote::historyFilePath(), store, &error);
+    });
+
     ClipNote::ClipboardWatcher watcher(&store);
 
     ClipNote::MainWindow window(&store, &watcher);

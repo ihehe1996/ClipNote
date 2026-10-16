@@ -20,6 +20,10 @@ struct Clip
     QPixmap thumb;       // kind == Image：列表里显示的小图，预先缩好，免得每次重绘都缩一遍
     uint imageHash = 0;  // kind == Image：去重用。逐像素比对太贵
 
+    // 收藏。收藏项**不受 kMaxItems 上限影响**，也不会被「清空历史」清掉 ——
+    // 收藏就是特意留下来的，被新记录挤掉就没意义了。
+    bool favorite = false;
+
     QDateTime capturedAt;
 };
 
@@ -41,6 +45,7 @@ public:
         KindRole,                    // Clip::Kind
         ThumbRole,                   // 图片的缩略图（QPixmap），列表显示用
         ImageRole,                   // 图片的原图（QImage），粘贴回去用
+        FavoriteRole,                // 收藏（bool）。**只能往后加**，插在中间会让后面所有 role 错位
     };
 
     // 历史上限，超出后从最旧的开始丢
@@ -62,7 +67,19 @@ public:
     // 删掉一条。越界就什么都不做，也不发信号。
     void removeAt(int row);
 
-    void clear();
+    // 「清空历史」：只删**非收藏**的条目，收藏的留着（右键菜单里那一项就是它）。
+    // 收藏项只能一条条手动取消收藏后删，见 clearFavorites()。
+    void clearHistory();
+
+    // 「取消全部收藏」：只把 favorite 标记清掉，**不删条目**。
+    void clearFavorites();
+
+    // 从磁盘恢复用：整批装进去，顺序、时间戳、收藏标记照抄。
+    // **刻意不走去重/置顶那套** —— 文件里的顺序就是展示顺序，而且时间戳不该被刷成「现在」。
+    void restoreTexts(const QVector<Clip> &items);
+
+    bool isFavorite(int row) const;
+    void setFavorite(int row, bool favorite);
 
     // 越界返回空串，不崩
     QString textAt(int row) const;

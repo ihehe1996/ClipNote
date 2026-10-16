@@ -3,6 +3,7 @@
 #include "platform/WindowResizer.h"   // m_resizer 是值成员，这里得要完整类型
 
 #include <QModelIndex>
+#include <QPersistentModelIndex>
 #include <QWidget>
 
 QT_BEGIN_NAMESPACE
@@ -10,11 +11,13 @@ class QEvent;
 class QLabel;
 class QListView;
 class QResizeEvent;
+class QTabBar;
 class QTimer;
 QT_END_NAMESPACE
 
 namespace ClipNote {
 
+class ClipFilterProxy;
 class ClipStore;
 class ClipboardWatcher;
 class TitleBar;
@@ -78,20 +81,38 @@ private:
     void showPreview();
     void hidePreview();
 
+    void onTabChanged(int tabIndex);
+    void toggleFavorite(const QModelIndex &proxyIndex);
+    void scheduleHistorySave();
+
     ClipStore *m_store = nullptr;
     ClipboardWatcher *m_watcher = nullptr;
     QWidget *m_owner = nullptr;   // 永远隐藏的归属窗口，作用是让面板不进任务栏
     TitleBar *m_titleBar = nullptr;   // 自绘标题栏（系统的没有，见 TitleBar.h）
+    QTabBar *m_tabs = nullptr;        // 「历史记录 / 收藏」
+    // 视图挂的是代理不是源模型。**索引语义见 ClipFilterProxy.h 和 MainWindow.cpp
+    // 里 pasteRow() 上面那段说明** —— 搞混了不会崩，只会在收藏页静默取错条目。
+    ClipFilterProxy *m_proxy = nullptr;
     QListView *m_list = nullptr;
     QLabel *m_empty = nullptr;
+
+    // 历史落盘：模型一变就重启这个单次定时器，停手 1 秒才真写，
+    // 免得每复制一次就写一遍盘（和面板尺寸那个定时器同一个套路）。
+    QTimer *m_saveHistoryTimer = nullptr;
 
     WindowResizer m_resizer{this};   // 拖边缘改大小（无边框窗口得自己补回来）
 
     // 悬停预览：文本停一会儿弹全文，图片停在缩略图上弹大图。
     PreviewPopup *m_preview = nullptr;
     QTimer *m_previewTimer = nullptr;
-    int m_previewRow = -1;          // 光标当前停在第几行，-1 = 不在任何一行上
-    bool m_previewOnThumb = false;  // 光标是不是正压在那一行的缩略图上
+    // 用**持久索引**而不是行号：计时器已经启动、还没到点时那一行可能被重排或被
+    // 过滤掉（收藏页取消收藏就会），行号会指向别的条目，持久索引则自动失效。
+    QPersistentModelIndex m_previewIndex;   // 代理空间
+    bool m_previewOnThumb = false;          // 光标是不是正压在那一行的缩略图上
+
+    // 星星手势。按下时记下是哪一颗（持久索引，同上），抬起时只有还落在同一颗上才切换。
+    bool m_starPressed = false;
+    QPersistentModelIndex m_starIndex;      // 代理空间
 
     // 尺寸变了要记进 QSettings，但拖动时 resizeEvent 是**每帧**一次，
     // 不能每帧都去写一遍注册表 —— 停手之后再落盘。

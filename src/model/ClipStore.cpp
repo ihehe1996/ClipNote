@@ -79,6 +79,8 @@ QVariant ClipStore::data(const QModelIndex &index, int role) const
         return clip.thumb;
     case ImageRole:
         return clip.image;
+    case FavoriteRole:
+        return clip.favorite;
     default:
         return {};
     }
@@ -118,6 +120,10 @@ void ClipStore::pushText(const QString &text)
     Clip clip;
     clip.kind = Clip::Text;
     clip.text = text;
+    // 已经在历史里就沿用它的收藏标记。不抄的话「收藏过的内容再复制一次」
+    // 会静悄悄地丢掉收藏 —— 因为这里是新建了一个 Clip，favorite 默认是 false。
+    if (row > 0)
+        clip.favorite = m_items.at(row).favorite;
     insertOrPromote(clip, row);
 }
 
@@ -139,6 +145,9 @@ void ClipStore::pushImage(const QImage &image)
     clip.image = image;
     clip.thumb = makeThumb(image);
     clip.imageHash = hash;
+    // 同 pushText：重复的图再复制一次不能把收藏弄丢
+    if (row > 0)
+        clip.favorite = m_items.at(row).favorite;
     insertOrPromote(clip, row);
 }
 
@@ -165,12 +174,25 @@ void ClipStore::insertOrPromote(const Clip &clip, int existingRow)
 
 void ClipStore::trimToLimit()
 {
-    if (m_items.size() <= kMaxItems)
+    // 上限管的是**非收藏**条目的条数，收藏项永远不参与截断 ——
+    // 所以这里不能像以前那样 resize() 一刀砍尾巴：要丢的那些行不连续了。
+    // 从尾部往前数着删，正常情况下每次只溢出 1 条，循环一轮就结束。
+    int plain = 0;
+    for (const Clip &clip : m_items) {
+        if (!clip.favorite)
+            ++plain;
+    }
+    if (plain <= kMaxItems)
         return;
 
-    beginRemoveRows(QModelIndex(), kMaxItems, m_items.size() - 1);
-    m_items.resize(kMaxItems);
-    endRemoveRows();
+    for (int row = m_items.size() - 1; row >= 0 && plain > kMaxItems; --row) {
+        if (m_items.at(row).favorite)
+            continue;
+        beginRemoveRows(QModelIndex(), row, row);
+        m_items.remove(row);
+        endRemoveRows();
+        --plain;
+    }
 }
 
 void ClipStore::removeAt(int row)
@@ -183,14 +205,61 @@ void ClipStore::removeAt(int row)
     endRemoveRows();
 }
 
-void ClipStore::clear()
+void ClipStore::clearHistory()
 {
-    if (m_items.isEmpty())
+    // 从后往前删非收藏的，收藏的跳过 —— 「清空历史（保留收藏）」就是它。
+    // 一条都没删（比如全是收藏）时自然一个信号也不发。
+    for (int row = m_items.size() - 1; row >= 0; --row) {
+        if (m_items.at(row).favorite)
+            continue;
+        beginRemoveRows(QModelIndex(), row, row);
+        m_items.remove(row);
+        endRemoveRows();
+    }
+}
+
+void ClipStore::clearFavorites()
+{
+    bool changedAny = false;
+    for (Clip &clip : m_items) {
+        if (clip.favorite) {
+            clip.favorite = false;
+            changedAny = true;
+        }
+    }
+    if (!changedAny)
         return;
 
+    // 改的是散落在各处的若干行，dataChanged 只能给一个连续区间；
+    // 整表 reset 最省事，反正这是个低频操作，代价只是列表重建一次。
     beginResetModel();
-    m_items.clear();
     endResetModel();
+}
+
+void ClipStore::restoreTexts(const QVector<Clip> &items)
+{
+    beginResetModel();
+    m_items = items;
+    endResetModel();
+}
+
+bool ClipStore::isFavorite(int row) const
+{
+    return row >= 0 && row < m_items.size() && m_items.at(row).favorite;
+}
+
+void ClipStore::setFavorite(int row, bool favorite)
+{
+    if (row < 0 || row >= m_items.size())
+        return;
+    if (m_items.at(row).favorite == favorite)
+        return;   // 没变就不发信号
+
+    m_items[row].favorite = favorite;
+
+    // 带上 roles：视图靠它知道只用重画那颗星，不必整行重画
+    const QModelIndex idx = index(row, 0);
+    emit dataChanged(idx, idx, {FavoriteRole});
 }
 
 QString ClipStore::textAt(int row) const

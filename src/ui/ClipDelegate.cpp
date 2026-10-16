@@ -6,6 +6,7 @@
 #include <QFontMetrics>
 #include <QPainter>
 #include <QPainterPath>
+#include <QtMath>
 
 namespace ClipNote {
 namespace {
@@ -26,6 +27,11 @@ constexpr int kLeadingSize = 34;
 constexpr int kLeadingGap = 11;
 
 constexpr int kTimeGap = 10;
+
+// 右侧那颗收藏星星，以及它和时间之间的间距
+constexpr int kStarSize = 16;
+constexpr int kStarGap = 8;
+constexpr int kStarHitPad = 4;   // 命中容差，见 ClipDelegate.h 的说明
 
 const QColor kTextColor(0x1F, 0x1F, 0x1F);
 const QColor kTimeColor(0x9E, 0x9E, 0x9E);
@@ -68,6 +74,29 @@ void drawTextGlyph(QPainter *painter, const QRectF &box, const QColor &color)
     painter->drawLine(QPointF(box.left(), box.bottom()), QPointF(box.right() - 6, box.bottom()));
 }
 
+// 正五角星。内圆半径取外接圆的 0.382 倍是五角星的经典比例，看着才不像个多边形。
+QPainterPath starPath(const QRectF &box)
+{
+    const QPointF center = box.center();
+    const qreal outer = qMin(box.width(), box.height()) / 2.0;
+    const qreal inner = outer * 0.382;
+
+    QPainterPath path;
+    for (int i = 0; i < 10; ++i) {
+        const qreal radius = (i % 2 == 0) ? outer : inner;
+        // 从正上方起画，每步 36°（十个点刚好一圈）
+        const qreal angle = -M_PI / 2 + i * M_PI / 5;
+        const QPointF point(center.x() + radius * std::cos(angle),
+                            center.y() + radius * std::sin(angle));
+        if (i == 0)
+            path.moveTo(point);
+        else
+            path.lineTo(point);
+    }
+    path.closeSubpath();
+    return path;
+}
+
 void drawThumbnail(QPainter *painter, const QRectF &box, const QPixmap &thumb)
 {
     if (thumb.isNull())
@@ -98,6 +127,19 @@ QRect leadingRect(const QRect &row)
     const int contentLeft = row.left() + kPadding + kAccentGutter;
     return QRect(contentLeft, row.top() + (row.height() - kLeadingSize) / 2,
                  kLeadingSize, kLeadingSize);
+}
+
+QRect starRect(const QRect &row)
+{
+    // row.right() 是闭区间的右端，+1 才和「右边留 kPadding」的口径一致
+    const int contentRight = row.right() - kPadding + 1;
+    return QRect(contentRight - kStarSize, row.top() + (row.height() - kStarSize) / 2,
+                 kStarSize, kStarSize);
+}
+
+QRect starHitRect(const QRect &row)
+{
+    return starRect(row).adjusted(-kStarHitPad, -kStarHitPad, kStarHitPad, kStarHitPad);
 }
 
 ClipDelegate::ClipDelegate(QObject *parent) : QStyledItemDelegate(parent) {}
@@ -144,8 +186,13 @@ void ClipDelegate::paint(QPainter *painter, const QStyleOptionViewItem &option,
         drawTextGlyph(painter, QRectF(leading).adjusted(8, 9, -8, -9), kGlyphColor);
     }
 
+    // 右边先给星星留出位置。时间和正文都以 textArea.right() 为右边界，
+    // 所以这里缩一次，下面两段自然跟着左移 —— 不必各自再算一遍。
+    const QRect star = starRect(row);
+    const int contentRight = star.left() - kStarGap;
+
     const QRect textArea(leading.right() + kLeadingGap, row.top(),
-                         qMax(0, row.right() - kPadding - (leading.right() + kLeadingGap)),
+                         qMax(0, contentRight - (leading.right() + kLeadingGap)),
                          row.height());
 
     // 右边：相对时间，用比正文小一号的字
@@ -176,6 +223,15 @@ void ClipDelegate::paint(QPainter *painter, const QStyleOptionViewItem &option,
     const QString elided =
         QFontMetrics(option.font).elidedText(text, Qt::ElideRight, textRect.width());
     painter->drawText(textRect, Qt::AlignLeft | Qt::AlignVCenter, elided);
+
+    // 收藏星星。没收藏是淡描边，收藏了是实心的强调蓝 —— 一眼能看出哪些收了。
+    const bool favorite = index.data(ClipStore::FavoriteRole).toBool();
+    QPen starPen(favorite ? kAccentColor : kGlyphColor, 1.4);
+    starPen.setJoinStyle(Qt::RoundJoin);
+    painter->setPen(starPen);
+    painter->setBrush(favorite ? QBrush(kAccentColor) : QBrush(Qt::NoBrush));
+    // 往里收 1.5px：描边是画在路径中心的，不收的话边线会被行边界切掉一半
+    painter->drawPath(starPath(QRectF(star).adjusted(1.5, 1.5, -1.5, -1.5)));
 
     painter->restore();
 }
