@@ -73,17 +73,20 @@ AboutDialog::AboutDialog(QWidget *parent) : QDialog(parent)
     header->addWidget(icon);
     header->addLayout(headerText, 1);
 
-    // 这几行是给「报 bug」用的：光看版本号不知道是哪个 Qt、哪个编译器出的问题
     auto *details = new QFormLayout;
     details->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
     details->setHorizontalSpacing(12);
     details->setVerticalSpacing(6);
+    details->addRow(QStringLiteral("开发语言"), new QLabel(QStringLiteral("C++"), this));
     details->addRow(QStringLiteral("默认热键"),
                     new QLabel(defaultHotkey().toHtmlEscaped(), this));
-    details->addRow(QStringLiteral("Qt"), new QLabel(QString::fromLatin1(qVersion()), this));
-    details->addRow(QStringLiteral("编译器"), new QLabel(compilerName(), this));
-    details->addRow(QStringLiteral("系统"),
-                    new QLabel(QSysInfo::prettyProductName(), this));
+    {
+        auto *homeLabel = new QLabel(
+            QStringLiteral("<a href=\"https://www.boshou.me\">www.boshou.me</a>"), this);
+        homeLabel->setOpenExternalLinks(true);
+        homeLabel->setTextInteractionFlags(Qt::TextBrowserInteraction);
+        details->addRow(QStringLiteral("作者主页"), homeLabel);
+    }
 
     auto *copyInfo = new QPushButton(QStringLiteral("复制版本信息"), this);
     copyInfo->setToolTip(QStringLiteral("把这台机器上的版本、Qt、编译器信息复制到剪贴板，报问题时贴这个"));
