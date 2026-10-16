@@ -3,6 +3,8 @@
 #include "AppConfig.h"
 #include "model/ClipFilterProxy.h"
 #include "model/ClipHistoryFile.h"
+#include "model/ClipImageFile.h"
+#include "model/ClipPageProxy.h"
 #include "model/ClipStore.h"
 #include "model/ClipboardWatcher.h"
 #include "platform/GlobalHotkey.h"
@@ -23,7 +25,11 @@
 #include <QDir>
 #include <QFile>
 #include <QGuiApplication>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QKeySequence>
+#include <QPixmap>
 #include <QProcess>
 #include <QTextStream>
 #include <QWidget>
@@ -396,26 +402,90 @@ int runSelfTest(const QStringList &arguments)
                            .arg(restored.rowCount()).arg(restored.textAt(0)).arg(restored.isFavorite(0))
                      : QStringLiteral("失败：%1").arg(error));
 
-        // 图片不该进文件：它不落盘（截图随时能重截，塞进磁盘不值当）。
+        // 图片：像素落到 images/<hash>.png，JSON 里只记元数据。
         // ClipStore 是 QObject，不能拷贝构造，所以重新灌一个。
+        const QString imagesDir = QDir(dir).filePath(QStringLiteral("images"));
         ClipStore withPic;
+        withPic.setImagesDir(imagesDir);
         QImage pic(20, 20, QImage::Format_ARGB32);
         pic.fill(Qt::green);
+        pic.setPixel(3, 4, qRgb(1, 2, 3));   // 点一个特殊像素，"读回来是不是同一张"靠它
         withPic.pushImage(pic);
-        withPic.pushText(QStringLiteral("落盘甲"));
+        withPic.pushText(QStringLiteral("落盘甲"));   // 文本推在后面 → 图片被挤到第 1 条
         saveHistory(path, withPic, &error);
 
         ClipStore reloaded;
+        reloaded.setImagesDir(imagesDir);
         loadHistory(path, &reloaded, &error);
+
         QFile dump(path);
         dump.open(QIODevice::ReadOnly);
         const QByteArray raw = dump.readAll();
         dump.close();
-        check(QStringLiteral("落盘：图片不写进文件（读回来只剩文本那条）"),
-              reloaded.rowCount() == 1 && reloaded.textAt(0) == QStringLiteral("落盘甲")
-                  && !raw.contains("base64"),
-              QStringLiteral("源 %1 条 → 读回 %2 条，文件 %3 字节")
-                  .arg(withPic.rowCount()).arg(reloaded.rowCount()).arg(raw.size()));
+
+        const uint picHash = withPic.items().at(1).imageHash;
+        const bool fileWritten = QFile::exists(imagePathFor(imagesDir, picHash))
+                                 && QFile::exists(thumbPathFor(imagesDir, picHash));
+
+        check(QStringLiteral("落盘：图片的像素写到 images/ 下的文件里，JSON 里只记元数据"),
+              reloaded.rowCount() == 2 && fileWritten && !raw.contains("base64")
+                  && raw.contains(QString::number(picHash, 16).toLatin1()),
+              QStringLiteral("源 %1 条 → 读回 %2 条，图片文件%3，JSON %4 字节")
+                  .arg(withPic.rowCount()).arg(reloaded.rowCount())
+                  .arg(fileWritten ? QStringLiteral("在") : QStringLiteral("不在")).arg(raw.size()));
+
+        const QModelIndex imgIndex = reloaded.index(1, 0);
+        check(QStringLiteral("落盘：图片条目读回来带缩略图和尺寸"),
+              reloaded.data(imgIndex, ClipStore::KindRole).toInt() == int(Clip::Image)
+                  && !reloaded.data(imgIndex, ClipStore::ThumbRole).value<QPixmap>().isNull()
+                  && reloaded.items().at(1).imageSize == QSize(20, 20),
+              QStringLiteral("显示为「%1」")
+                  .arg(reloaded.data(imgIndex, Qt::DisplayRole).toString()));
+
+        // 懒加载的核心：读回来的时候原图**不在内存里**，要的时候才去磁盘读
+        const bool notInMemory =
+            reloaded.data(imgIndex, ClipStore::ImageRole).value<QImage>().isNull();
+        const QImage lazilyLoaded = reloaded.loadFullImage(1);
+        check(QStringLiteral("懒加载：原图不常驻内存，要的时候能读出来且和写进去的一致"),
+              notInMemory && !lazilyLoaded.isNull() && lazilyLoaded.size() == QSize(20, 20)
+                  && lazilyLoaded.pixel(3, 4) == qRgb(1, 2, 3),
+              QStringLiteral("内存里%1，磁盘读回 %2×%3")
+                  .arg(notInMemory ? QStringLiteral("没有") : QStringLiteral("有"))
+                  .arg(lazilyLoaded.width()).arg(lazilyLoaded.height()));
+
+        // 原图文件没了 → 读不到，但条目还在（降级不崩）。
+        // **必须换一个 store 实例**：上面那次 loadFullImage 已经把图缓存起来了，
+        // 同一个实例再问会拿到缓存（那本身是想要的行为 —— 刚看过就还在内存里），
+        // 验不出「文件没了会怎样」。
+        QFile::remove(imagePathFor(imagesDir, picHash));
+        ClipStore secondRead;
+        secondRead.setImagesDir(imagesDir);
+        loadHistory(path, &secondRead, &error);
+        check(QStringLiteral("懒加载：原图文件被删掉之后读不到，但条目还在、不崩"),
+              secondRead.loadFullImage(1).isNull() && secondRead.rowCount() == 2,
+              QStringLiteral("读回空=%1，条数 %2")
+                  .arg(secondRead.loadFullImage(1).isNull()).arg(secondRead.rowCount()));
+
+        // 缩略图也没了的条目，读历史时应当**直接跳过**（宁可少一条，也不留点不开的坏条目）
+        QFile::remove(thumbPathFor(imagesDir, picHash));
+        ClipStore skipped;
+        skipped.setImagesDir(imagesDir);
+        loadHistory(path, &skipped, &error);
+        check(QStringLiteral("落盘：图片文件不在的条目读历史时被跳过，只留文本"),
+              skipped.rowCount() == 1 && skipped.textAt(0) == QStringLiteral("落盘甲"),
+              QStringLiteral("读回 %1 条：「%2」").arg(skipped.rowCount()).arg(skipped.textAt(0)));
+
+        // 删条目要把文件一起删掉，不然磁盘只涨不落
+        ClipStore victim;
+        victim.setImagesDir(imagesDir);
+        victim.pushImage(pic);
+        const uint victimHash = victim.items().at(0).imageHash;
+        victim.removeAt(0);
+        check(QStringLiteral("落盘：删掉条目会把它的图片文件一起删掉"),
+              !QFile::exists(imagePathFor(imagesDir, victimHash))
+                  && !QFile::exists(thumbPathFor(imagesDir, victimHash)),
+              QStringLiteral("哈希 %1 的文件还在吗：%2")
+                  .arg(victimHash).arg(QFile::exists(imagePathFor(imagesDir, victimHash))));
 
         // 文件不在 → 当空历史，不报错、不崩
         ClipStore fresh;
@@ -426,6 +496,174 @@ int runSelfTest(const QStringList &arguments)
               QStringLiteral("返回 %1，条数 %2").arg(missing).arg(fresh.rowCount()));
 
         QDir(dir).removeRecursively();
+    }
+
+    // 6e. 分页。纯模型层，不碰 UI —— 这块的信号规则最容易写错，所以逐条钉死。
+    {
+        ClipStore store;
+        for (int i = 0; i < 55; ++i)
+            store.pushText(QStringLiteral("clip-%1").arg(i));   // 列表：clip-54 … clip-0
+
+        ClipFilterProxy filter;
+        filter.setSourceModel(&store);
+        ClipPageProxy page;
+        page.setSourceModel(&filter);
+
+        check(QStringLiteral("分页：只显示一页，但底层仍是全量"),
+              page.rowCount() == itemsPerPage() && store.rowCount() == 55 && page.hasMore(),
+              QStringLiteral("显示 %1 行，底层 %2 条，还有更多=%3")
+                  .arg(page.rowCount()).arg(store.rowCount()).arg(page.hasMore()));
+
+        check(QStringLiteral("分页：显示的是最新的那几条"),
+              page.data(page.index(0, 0), ClipStore::TextRole).toString() == QStringLiteral("clip-54"),
+              QStringLiteral("第 0 行是「%1」")
+                  .arg(page.data(page.index(0, 0), ClipStore::TextRole).toString()));
+
+        // loadMore 是**追加在尾部**：视图行数变多，已有的行位置不动
+        const QString row19Before = page.data(page.index(19, 0), ClipStore::TextRole).toString();
+        page.loadMore();
+        check(QStringLiteral("分页：再加载一页是追加，前面的行不动"),
+              page.rowCount() == 2 * itemsPerPage()
+                  && page.data(page.index(19, 0), ClipStore::TextRole).toString() == row19Before
+                  && page.data(page.index(20, 0), ClipStore::TextRole).toString()
+                         == QStringLiteral("clip-34"),
+              QStringLiteral("显示 %1 行，第 20 行是「%2」")
+                  .arg(page.rowCount())
+                  .arg(page.data(page.index(20, 0), ClipStore::TextRole).toString()));
+
+        // 最要紧的一条：**已经满页时来了新条目**，行数不能变（发 dataChanged，不发 rowsInserted）
+        const QString row18Before = page.data(page.index(18, 0), ClipStore::TextRole).toString();
+        int insertedSignals = 0;
+        QObject::connect(&page, &QAbstractItemModel::rowsInserted, &page,
+                         [&insertedSignals](const QModelIndex &, int, int) { ++insertedSignals; });
+        store.pushText(QStringLiteral("刚刚复制的"));
+        check(QStringLiteral("分页：满页时来了新条目，行数不变、内容整体下移一格"),
+              page.rowCount() == 2 * itemsPerPage()
+                  && insertedSignals == 0
+                  && page.data(page.index(0, 0), ClipStore::TextRole).toString()
+                         == QStringLiteral("刚刚复制的")
+                  && page.data(page.index(19, 0), ClipStore::TextRole).toString() == row18Before,
+              QStringLiteral("行数 %1，发了 %2 次 rowsInserted，第 19 行是「%3」（应为「%4」）")
+                  .arg(page.rowCount()).arg(insertedSignals)
+                  .arg(page.data(page.index(19, 0), ClipStore::TextRole).toString(), row18Before));
+
+        // 没满页时来新条目，那才是真的多一行
+        ClipStore small;
+        for (int i = 0; i < 5; ++i)
+            small.pushText(QStringLiteral("s-%1").arg(i));
+        ClipFilterProxy smallFilter;
+        smallFilter.setSourceModel(&small);
+        ClipPageProxy smallPage;
+        smallPage.setSourceModel(&smallFilter);
+        int smallInserted = 0;
+        QObject::connect(&smallPage, &QAbstractItemModel::rowsInserted, &smallPage,
+                         [&smallInserted](const QModelIndex &, int, int) { ++smallInserted; });
+        const int beforeSmall = smallPage.rowCount();
+        small.pushText(QStringLiteral("s-新"));
+        check(QStringLiteral("分页：没满页时来新条目，行数加一"),
+              beforeSmall == 5 && smallPage.rowCount() == 6 && smallInserted == 1,
+              QStringLiteral("行数 %1 → %2，发了 %3 次 rowsInserted")
+                  .arg(beforeSmall).arg(smallPage.rowCount()).arg(smallInserted));
+
+        // 分页必须作用在**过滤之后**：收藏页里显示的得是前 20 个收藏，
+        // 而不是"前 20 条里的收藏"（那样早期收藏的条目会永远看不见）
+        ClipFilterProxy favFilter;
+        favFilter.setSourceModel(&store);
+        ClipPageProxy favPage;
+        favPage.setSourceModel(&favFilter);
+        // 条数要**多于一页**，否则验不出"分页作用在过滤之后"（一共才十几条的话
+        // 一页就装下了，分不分页看不出区别）
+        for (int row = 34; row < store.rowCount(); ++row)   // 靠后的 22 条
+            store.setFavorite(row, true);
+        favFilter.setMode(ClipFilterProxy::Favorites);
+        favPage.resetPaging();
+
+        const QString firstFavorite = store.textAt(34);
+        check(QStringLiteral("分页：作用在过滤之后（收藏页显示的是前 20 个收藏）"),
+              favPage.rowCount() == itemsPerPage() && favPage.hasMore()
+                  && favPage.data(favPage.index(0, 0), ClipStore::TextRole).toString()
+                         == firstFavorite,
+              QStringLiteral("收藏页显示 %1 行，第 0 行是「%2」（源第 34 条是「%3」）")
+                  .arg(favPage.rowCount())
+                  .arg(favPage.data(favPage.index(0, 0), ClipStore::TextRole).toString(),
+                       firstFavorite));
+
+        // 切页复位成一页
+        favPage.loadMore();
+        const int expanded = favPage.rowCount();
+        favPage.resetPaging();
+        check(QStringLiteral("分页：切选项卡后页数拨回一页"),
+              expanded > itemsPerPage() && favPage.rowCount() == itemsPerPage(),
+              QStringLiteral("%1 行 → 复位成 %2 行").arg(expanded).arg(favPage.rowCount()));
+
+        // 落盘**不受分页影响** —— 这是唯一会静默丢数据的做法（重启后历史只剩一页）
+        const QString pageDir =
+            QDir(QDir::temp().filePath(QStringLiteral("ClipNote-selftest-paging"))).absolutePath();
+        QDir().mkpath(pageDir);
+        const QString pagePath = QDir(pageDir).filePath(QStringLiteral("history.json"));
+        QString pageError;
+        saveHistory(pagePath, store, &pageError);
+        QFile pageDump(pagePath);
+        pageDump.open(QIODevice::ReadOnly);
+        const QJsonDocument pageDoc = QJsonDocument::fromJson(pageDump.readAll());
+        pageDump.close();
+        const int savedCount = pageDoc.object().value(QStringLiteral("items")).toArray().size();
+        check(QStringLiteral("分页：落盘写的是全量，不是当前显示的那一页"),
+              savedCount == store.rowCount() && favPage.rowCount() == itemsPerPage()
+                  && savedCount > favPage.rowCount(),
+              QStringLiteral("存了 %1 条，底层 %2 条，收藏页当前只显示 %3 行")
+                  .arg(savedCount).arg(store.rowCount()).arg(favPage.rowCount()));
+        QDir(pageDir).removeRecursively();
+
+        // 信号审计：把过滤代理切模式时**实际**发的信号记进日志。
+        // 分页层的不少设计是在躲 invalidateFilter() 的行为（它到底发 rowsInserted
+        // 还是 layoutChanged 是版本相关的、没保证），与其赌，不如记下来 ——
+        // 以后 Qt 升级改了行为，日志里立刻看得见，而不是靠 UI 偶发跳动去猜。
+        {
+            // 要有"过滤真的改变了行数"的情形，不然代理可能优化成什么都不发
+            // —— 这本身也是个结论：**不能指望切模式一定发信号**，所以 MainWindow
+            // 切页后是显式再叫一次分页层，而不是等信号。
+            ClipStore auditStore;
+            auditStore.pushText(QStringLiteral("甲"));
+            auditStore.pushText(QStringLiteral("乙"));
+            auditStore.pushText(QStringLiteral("丙"));
+            auditStore.setFavorite(1, true);
+            ClipFilterProxy audit;
+            audit.setSourceModel(&auditStore);
+
+            QStringList emitted;
+            // 用**带完整参数**的签名接：带个"少参数"的 lambda 理论上也行，但这里
+            // 是在做信号审计，仪器本身不能有疑问
+            QObject::connect(&audit, &QAbstractItemModel::modelReset, &audit,
+                             [&emitted] { emitted << QStringLiteral("modelReset"); });
+            QObject::connect(&audit, &QAbstractItemModel::layoutChanged, &audit,
+                             [&emitted](const QList<QPersistentModelIndex> &,
+                                        QAbstractItemModel::LayoutChangeHint) {
+                                 emitted << QStringLiteral("layoutChanged");
+                             });
+            QObject::connect(&audit, &QAbstractItemModel::rowsInserted, &audit,
+                             [&emitted](const QModelIndex &, int, int) {
+                                 emitted << QStringLiteral("rowsInserted");
+                             });
+            QObject::connect(&audit, &QAbstractItemModel::rowsRemoved, &audit,
+                             [&emitted](const QModelIndex &, int, int) {
+                                 emitted << QStringLiteral("rowsRemoved");
+                             });
+            QObject::connect(&audit, &QAbstractItemModel::dataChanged, &audit,
+                             [&emitted](const QModelIndex &, const QModelIndex &, const QList<int> &) {
+                                 emitted << QStringLiteral("dataChanged");
+                             });
+
+            const int before = audit.rowCount();
+            audit.setMode(ClipFilterProxy::Favorites);
+            audit.refresh();
+            const int after = audit.rowCount();
+            note(QStringLiteral("过滤代理 setMode/refresh 实际发的信号（分页层要能接住）"),
+                 QStringLiteral("行数 %1 → %2，发的信号：%3")
+                     .arg(before).arg(after)
+                     .arg(emitted.isEmpty() ? QStringLiteral("（什么都没发）")
+                                            : emitted.join(QStringLiteral(" + "))));
+        }
     }
 
     // 7. 「点条目写回剪贴板」不该让历史重排。

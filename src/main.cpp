@@ -7,6 +7,7 @@
 #include "AppConfig.h"
 #include "SelfTest.h"
 #include "model/ClipHistoryFile.h"
+#include "model/ClipImageFile.h"
 #include "model/ClipStore.h"
 #include "model/ClipboardWatcher.h"
 #include "platform/GlobalHotkey.h"
@@ -45,6 +46,8 @@ int main(int argc, char *argv[])
     ClipNote::UpdateInstaller::cleanStaleWorkDirs();
 
     ClipNote::ClipStore store;
+    // 图片落盘到哪。**必须在 loadHistory 之前设** —— 读历史时要靠它去读缩略图。
+    store.setImagesDir(ClipNote::defaultImagesDir());
 
     // 先把上次的历史装回来，**再**建 watcher：watcher 构造时会采样一次当前剪贴板，
     // 那是要的 —— 你最后复制的东西本来就该在最前面；要是它已经在历史里，
@@ -54,6 +57,10 @@ int main(int argc, char *argv[])
         QString error;
         ClipNote::loadHistory(ClipNote::historyFilePath(), &store, &error);
     }
+
+    // 扫掉没人引用的图片文件。这是兜底：程序要是在「写完图片」和「写 history.json」
+    // 之间崩掉（或者被强杀），就会留下一个永远没人引用的图片文件占着磁盘。
+    ClipNote::removeOrphanImages(store.imagesDir(), store.liveImageHashes());
 
     // 退出前补存一次：写盘是防抖的，刚复制完就退出的话定时器还没到点，那条就丢了。
     QObject::connect(&app, &QCoreApplication::aboutToQuit, &app, [&store] {

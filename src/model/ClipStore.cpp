@@ -1,5 +1,7 @@
 #include "model/ClipStore.h"
 
+#include "model/ClipImageFile.h"
+
 #include <QHashFunctions>
 
 namespace ClipNote {
@@ -59,8 +61,11 @@ QVariant ClipStore::data(const QModelIndex &index, int role) const
 
     switch (role) {
     case Qt::DisplayRole:
+        // 尺寸读 imageSize 而不是 clip.image：从磁盘恢复的条目原图是空的（懒加载），
+        // 问 clip.image 会得到 0 × 0
         return clip.kind == Clip::Image
-                   ? QStringLiteral("图片  %1 × %2").arg(clip.image.width()).arg(clip.image.height())
+                   ? QStringLiteral("图片  %1 × %2").arg(clip.imageSize.width())
+                         .arg(clip.imageSize.height())
                    : oneLine(clip.text);
     // 「鼠标停住时显示什么」。文本给全文，由 MainWindow 交给 QToolTip 弹**原生气泡**
     // —— 也只有这一处会给，两边都给就会弹两个（试过，同一段文字出来两次）。
@@ -142,9 +147,21 @@ void ClipStore::pushImage(const QImage &image)
 
     Clip clip;
     clip.kind = Clip::Image;
-    clip.image = image;
+    clip.imageSize = image.size();
     clip.thumb = makeThumb(image);
     clip.imageHash = hash;
+
+    // 落盘。**立刻同步写，不走那个 1 秒防抖** —— 防抖是为「连续复制」设计的，
+    // 而图片这条要是等 1 秒再写、用户 0.3 秒后退出就白复制了。
+    // 代价是 PNG 编码占住 UI（典型截图几十到几百毫秒），低频操作，可以接受。
+    const bool persisted = !m_imagesDir.isEmpty()
+                           && saveImage(m_imagesDir, hash, image, clip.thumb);
+
+    // 写下去了就只留缩略图（原图在磁盘上，要的时候再读）；
+    // 写不下去才把原图留在内存里 —— 本次会话至少还能粘贴，重启后没了，
+    // 和「不落盘」时的行为一致
+    if (!persisted)
+        clip.image = image;
     // 同 pushText：重复的图再复制一次不能把收藏弄丢
     if (row > 0)
         clip.favorite = m_items.at(row).favorite;
@@ -188,6 +205,7 @@ void ClipStore::trimToLimit()
     for (int row = m_items.size() - 1; row >= 0 && plain > kMaxItems; --row) {
         if (m_items.at(row).favorite)
             continue;
+        dropImageFile(m_items.at(row));   // 图片文件跟着条目走，不删就是永远占着磁盘
         beginRemoveRows(QModelIndex(), row, row);
         m_items.remove(row);
         endRemoveRows();
@@ -200,9 +218,56 @@ void ClipStore::removeAt(int row)
     if (row < 0 || row >= m_items.size())
         return;
 
+    dropImageFile(m_items.at(row));
+
+    // 缓存那行要是被删了或者挪位了，就作废（不然 loadFullImage 会返回别人的图）
+    m_cachedRow = -1;
+
     beginRemoveRows(QModelIndex(), row, row);
     m_items.remove(row);
     endRemoveRows();
+}
+
+void ClipStore::dropImageFile(const Clip &clip)
+{
+    if (clip.kind != Clip::Image || clip.imageHash == 0)
+        return;
+    removeImage(m_imagesDir, clip.imageHash);
+}
+
+QSet<uint> ClipStore::liveImageHashes() const
+{
+    QSet<uint> hashes;
+    for (const Clip &clip : m_items) {
+        if (clip.kind == Clip::Image && clip.imageHash != 0)
+            hashes.insert(clip.imageHash);
+    }
+    return hashes;
+}
+
+QImage ClipStore::loadFullImage(int row)
+{
+    if (row < 0 || row >= m_items.size())
+        return {};
+
+    const Clip &clip = m_items.at(row);
+    if (clip.kind != Clip::Image)
+        return {};
+
+    // 本次会话里复制进来的（或者没配图片目录时的）条目，原图本来就在内存里
+    if (!clip.image.isNull())
+        return clip.image;
+
+    if (m_cachedRow == row && !m_cachedImage.isNull())
+        return m_cachedImage;
+
+    const QImage loaded = loadImage(m_imagesDir, clip.imageHash);
+    if (loaded.isNull())
+        return {};   // 文件被删了/坏了 —— 调用方按「这条失效」处理
+
+    m_cachedRow = row;
+    m_cachedImage = loaded;
+    return loaded;
 }
 
 void ClipStore::clearHistory()
@@ -212,6 +277,7 @@ void ClipStore::clearHistory()
     for (int row = m_items.size() - 1; row >= 0; --row) {
         if (m_items.at(row).favorite)
             continue;
+        dropImageFile(m_items.at(row));
         beginRemoveRows(QModelIndex(), row, row);
         m_items.remove(row);
         endRemoveRows();

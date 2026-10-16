@@ -24,8 +24,11 @@ public:
 
     Mode mode() const { return m_mode; }
 
-    // 切页。改完记得让调用方自己再刷一遍空状态 —— invalidateFilter() 到底发
-    // modelReset 还是 layoutChanged 不值得赌。
+    // 切页。改完记得让调用方自己再刷一遍空状态。
+    //
+    // `invalidateFilter()` 实际发的是 **rowsRemoved**（自检里那条「信号审计」量出来的：
+    // 3 行切到只剩 1 行，发两次 rowsRemoved），不是 layoutChanged、也不是 modelReset。
+    // 这个结论是量出来的、不是猜的，所以上下两层的衔接可以照它写。
     void setMode(Mode mode);
 
     // 重新过滤。**收藏状态变了之后必须调**：代理不会自己重评估某一行的自定义

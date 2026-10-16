@@ -18,6 +18,7 @@ QT_END_NAMESPACE
 namespace ClipNote {
 
 class ClipFilterProxy;
+class ClipPageProxy;
 class ClipStore;
 class ClipboardWatcher;
 class TitleBar;
@@ -88,20 +89,28 @@ private:
     void toggleFavorite(const QModelIndex &proxyIndex);
     void scheduleHistorySave();
 
+    void maybeLoadMore();          // 位置式：滚到底了
+    void ensureViewportFilled();   // 填充式：一页填不满视口
+
     ClipStore *m_store = nullptr;
     ClipboardWatcher *m_watcher = nullptr;
     QWidget *m_owner = nullptr;   // 永远隐藏的归属窗口，作用是让面板不进任务栏
     TitleBar *m_titleBar = nullptr;   // 自绘标题栏（系统的没有，见 TitleBar.h）
     QTabBar *m_tabs = nullptr;        // 「历史记录 / 收藏」
-    // 视图挂的是代理不是源模型。**索引语义见 ClipFilterProxy.h 和 MainWindow.cpp
-    // 里 pasteRow() 上面那段说明** —— 搞混了不会崩，只会在收藏页静默取错条目。
-    ClipFilterProxy *m_proxy = nullptr;
+    // 视图挂的是**两层代理**：过滤（选项卡）+ 分页（每次 20 条）。
+    // **索引语义见 MainWindow.cpp 里 pasteRow() 上面那段说明** —— 反查源行号要用
+    // m_paging->storeRow()，不能用 mapToSource（那只会退到中间那层）。
+    ClipFilterProxy *m_filter = nullptr;
+    ClipPageProxy *m_paging = nullptr;
     QListView *m_list = nullptr;
     QLabel *m_empty = nullptr;
 
     // 历史落盘：模型一变就重启这个单次定时器，停手 1 秒才真写，
     // 免得每复制一次就写一遍盘（和面板尺寸那个定时器同一个套路）。
     QTimer *m_saveHistoryTimer = nullptr;
+
+    // 填充式加载的防重入：它会在 loadMore() 里连锁触发 rangeChanged 再回调进来
+    bool m_fillingViewport = false;
 
     WindowResizer m_resizer{this};   // 拖边缘改大小（无边框窗口得自己补回来）
 

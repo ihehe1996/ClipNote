@@ -4,6 +4,8 @@
 #include <QDateTime>
 #include <QImage>
 #include <QPixmap>
+#include <QSet>
+#include <QSize>
 #include <QString>
 #include <QVector>
 
@@ -16,9 +18,13 @@ struct Clip
     Kind kind = Text;
 
     QString text;        // kind == Text
-    QImage image;        // kind == Image：原图。粘贴回去要用它，所以不能只留缩略图
+    QImage image;        // kind == Image：原图。**从磁盘恢复的条目这里是空的**（懒加载），
+                         // 要原图请走 ClipStore::loadFullImage()
     QPixmap thumb;       // kind == Image：列表里显示的小图，预先缩好，免得每次重绘都缩一遍
-    uint imageHash = 0;  // kind == Image：去重用。逐像素比对太贵
+    uint imageHash = 0;  // kind == Image：去重用。逐像素比对太贵。也是落盘的文件名
+    // kind == Image：原图的像素尺寸。**必须单独存**：懒加载之后 image 是空的，
+    // 没法再问它「你多大」，而列表上「图片 1920 × 1080」这一行要用。
+    QSize imageSize;
 
     // 收藏。收藏项**不受 kMaxItems 上限影响**，也不会被「清空历史」清掉 ——
     // 收藏就是特意留下来的，被新记录挤掉就没意义了。
@@ -84,6 +90,27 @@ public:
     // 越界返回空串，不崩
     QString textAt(int row) const;
 
+    // 图片落盘的目录。**空 = 不落盘**（自检就是这么用的：指着临时目录跑，
+    // 或者干脆不设，退化成纯内存那套行为）。
+    void setImagesDir(const QString &dir) { m_imagesDir = dir; }
+    QString imagesDir() const { return m_imagesDir; }
+
+    // 要原图时才去磁盘读（懒加载的入口）。
+    //   · 本次会话里复制进来的图，本来就在内存里，直接返回
+    //   · 从磁盘恢复的条目，这里才去读 <hash>.png
+    //   · 读不到（文件被删了、坏了）返回空 —— 调用方按「这条失效」处理，别崩
+    // 内部记着**上一次读出来的那一张**（一行缓存）：悬停预览会在同一行反复要图，
+    // 有它就不用反复读盘；但也只缓存一行，不然内存又涨回「所有图都常驻」。
+    QImage loadFullImage(int row);
+
+    // 当前历史里所有图片条目的哈希。启动时用它扫掉没人引用的孤儿图片文件。
+    QSet<uint> liveImageHashes() const;
+
+    // 全部条目（**不是**「当前显示的」—— 分页只活在代理层，这里永远是全量）。
+    // 给落盘用的：存的是数据本身，走 roles 去问视图那一套又慢又绕，
+    // 而且懒加载之后 ImageRole 是空的、拿不到哈希和尺寸。
+    const QVector<Clip> &items() const { return m_items; }
+
     // 图片内容指纹。写剪贴板的一方和收剪贴板的一方都算它，才能判断
     // 「这次剪贴板变化是不是我们自己写的」。按缩略图算而不是原图：
     // 原图可能有几十 MB，每次粘贴都哈希一遍会卡顿。
@@ -95,7 +122,17 @@ private:
     void insertOrPromote(const Clip &clip, int existingRow);
     void trimToLimit();
 
+    // 条目被丢掉时，把它落盘的图片文件一起删掉（幂等）。
+    // **insertOrPromote() 里那个「删掉再插到头部」不能调它** —— 哈希没变，
+    // 文件要留着重写，删了就白写了。
+    void dropImageFile(const Clip &clip);
+
     QVector<Clip> m_items;
+    QString m_imagesDir;   // 空 = 不落盘
+
+    // 一行缓存，见 loadFullImage()
+    int m_cachedRow = -1;
+    QImage m_cachedImage;
 };
 
 } // namespace ClipNote

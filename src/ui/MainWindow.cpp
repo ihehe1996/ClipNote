@@ -3,6 +3,7 @@
 #include "AppConfig.h"
 #include "model/ClipFilterProxy.h"
 #include "model/ClipHistoryFile.h"
+#include "model/ClipPageProxy.h"
 #include "model/ClipStore.h"
 #include "model/ClipboardWatcher.h"
 #include "platform/AutoPaste.h"
@@ -29,6 +30,7 @@
 #include <QPainter>
 #include <QResizeEvent>
 #include <QScreen>
+#include <QScrollBar>
 #include <QSettings>
 #include <QTabBar>
 #include <QTimer>
@@ -129,12 +131,16 @@ MainWindow::MainWindow(ClipStore *store, ClipboardWatcher *watcher, QWidget *par
         dialog.exec();
     });
 
-    // 视图挂的是**代理**：顶部两个选项卡靠它过滤。索引语义见下面 pasteRow() 上面那段。
-    m_proxy = new ClipFilterProxy(this);
-    m_proxy->setSourceModel(m_store);
+    // 视图挂的是**两层代理**：先过滤（选项卡），再分页（每次 20 条）。
+    // 索引语义见下面 pasteRow() 上面那段。
+    m_filter = new ClipFilterProxy(this);
+    m_filter->setSourceModel(m_store);
+
+    m_paging = new ClipPageProxy(this);
+    m_paging->setSourceModel(m_filter);
 
     m_list = new QListView(this);
-    m_list->setModel(m_proxy);
+    m_list->setModel(m_paging);
     m_list->setItemDelegate(new ClipDelegate(m_list));   // 每行的画法见 ClipDelegate
     m_list->setUniformItemSizes(true);
     m_list->setTextElideMode(Qt::ElideRight);
@@ -219,11 +225,17 @@ MainWindow::MainWindow(ClipStore *store, ClipboardWatcher *watcher, QWidget *par
 
     connect(m_tabs, &QTabBar::currentChanged, this, &MainWindow::onTabChanged);
 
-    // 空状态接的是**代理**的信号，不是源模型的：接源模型的话，源一发信号就可能先跑到
-    // 这里，而代理内部的行数映射还没更新，读到的 rowCount 是旧的。
-    connect(m_proxy, &QAbstractItemModel::rowsInserted, this, &MainWindow::updateEmptyState);
-    connect(m_proxy, &QAbstractItemModel::rowsRemoved, this, &MainWindow::updateEmptyState);
-    connect(m_proxy, &QAbstractItemModel::modelReset, this, &MainWindow::updateEmptyState);
+    // 空状态接的是**视图那层代理**的信号，不是源模型的：接源模型的话，源一发信号就可能
+    // 先跑到这里，而代理内部的行数映射还没更新，读到的 rowCount 是旧的。
+    connect(m_paging, &QAbstractItemModel::rowsInserted, this, &MainWindow::updateEmptyState);
+    connect(m_paging, &QAbstractItemModel::rowsRemoved, this, &MainWindow::updateEmptyState);
+    connect(m_paging, &QAbstractItemModel::modelReset, this, &MainWindow::updateEmptyState);
+
+    // 「滚到底加载更多」。两条路径都要有，各自管一种情况，见这两个函数里的说明。
+    connect(m_list->verticalScrollBar(), &QScrollBar::valueChanged, this,
+            &MainWindow::maybeLoadMore);
+    connect(m_list->verticalScrollBar(), &QScrollBar::rangeChanged, this,
+            &MainWindow::ensureViewportFilled);
 
     // 历史落盘：模型变了就重启定时器，停手 1 秒才写。接的是**源模型** ——
     // 落盘关心的是全部历史，跟当前在看哪个选项卡无关。
@@ -327,17 +339,18 @@ void MainWindow::startSilentUpdateCheck()
     m_silentChecker->check();
 }
 
-// 索引语义（加了过滤代理之后，这块是最容易错的地方）：
+// 索引语义（视图和 store 之间隔着**两层**代理：过滤 + 分页）：
 //
 //   视图吐出来的 index —— clicked 的参数、indexAt()、visualRect() 的入参 ——
-//   **一律是代理索引**。取数据可以直接 index.data(...)，代理会自动转发到源模型。
+//   是**分页代理**的索引。取数据可以直接 index.data(...)，Qt 会一层层转发到 store。
 //
 //   **千万别写 m_store->data(代理索引)**：它不做映射，会把代理行号当源行号用。
-//   历史页不过滤、行号恰好重合，看着一切正常；一切到收藏页就静默取错条目 ——
+//   历史页不过滤、行号又恰好重合，看着一切正常；一切到收藏页就静默取错条目 ——
 //   不崩、不报错，预览显示成另一条的、右键删除删掉另一条。
 //
-//   反过来，凡是喂给源模型的行号（removeAt / setFavorite / isFavorite）必须走
-//   m_proxy->mapToSource(index).row()。
+//   反过来，凡是喂给 store 的行号（removeAt / setFavorite / loadFullImage）必须走
+//   **m_paging->storeRow(index)** —— 注意不是 mapToSource()：那只会退一层，
+//   给出的是过滤代理的行号，还得再退一层才是 store 的行号。
 void MainWindow::pasteRow(const QModelIndex &index)
 {
     if (!index.isValid())
@@ -350,7 +363,9 @@ void MainWindow::pasteRow(const QModelIndex &index)
     // 内容，触发 store 把这一条挪到列表最前面 —— 面板并不关闭，列表就在用户眼皮底下
     // 重排，他下一次点击会落到别的条目上。
     if (index.data(ClipStore::KindRole).toInt() == int(Clip::Image)) {
-        const QImage image = index.data(ClipStore::ImageRole).value<QImage>();
+        // 懒加载：从磁盘恢复的条目内存里没有原图，得现读（几十毫秒，感觉不到）。
+        // 读不到就说明文件没了 —— 当这条失效，静默跳过，不写剪贴板也不注入 Ctrl+V。
+        const QImage image = m_store->loadFullImage(m_paging->storeRow(index));
         if (image.isNull())
             return;
         if (m_watcher)
@@ -402,20 +417,21 @@ void MainWindow::showContextMenu(const QPoint &pos)
         return;
 
     // 菜单关掉之后那个索引可能已经失效（见上面那条注释），映射成源行号之前再确认一次
-    const QModelIndex source = index.isValid() ? m_proxy->mapToSource(index) : QModelIndex();
+    const int sourceRow = index.isValid() ? m_paging->storeRow(index) : -1;
 
     if (chosen == favoriteAction) {
-        if (source.isValid())
-            m_store->setFavorite(source.row(), !m_store->isFavorite(source.row()));
-        // 在收藏页取消收藏，这一行得立刻从列表里消失 —— 代理不会自己重评估。
+        if (sourceRow >= 0)
+            m_store->setFavorite(sourceRow, !m_store->isFavorite(sourceRow));
+        // 在收藏页取消收藏，这一行得立刻从列表里消失 —— 过滤代理不会自己重评估。
         // 放在 dataChanged 的槽里做会重入，所以由调用方显式刷。
-        m_proxy->refresh();
-        // refresh() 到底发 rowsRemoved 还是只有 layoutChanged 不值得赌，
-        // 而空状态是靠那些信号更新的 —— 取消掉收藏页最后一条时要能切到空状态文案
+        m_filter->refresh();
+        // refresh() 到底发 rowsRemoved 还是只有 layoutChanged 不值得赌（分页层两种都接着，
+        // 但刷新空状态没人替我们做），干脆自己显式来一遍
+        m_paging->refreshWindow();
         updateEmptyState();
     } else if (chosen == removeAction) {
-        if (source.isValid())
-            m_store->removeAt(source.row());
+        if (sourceRow >= 0)
+            m_store->removeAt(sourceRow);
     } else if (chosen == clearAction) {
         m_store->clearHistory();
     } else if (chosen == unfavoriteAllAction) {
@@ -491,22 +507,64 @@ void MainWindow::moveEvent(QMoveEvent *event)
 
 void MainWindow::updateEmptyState()
 {
-    // 问**代理**：空不空要按当前选项卡算，历史页有东西不代表收藏页也有
-    const bool hasRows = m_proxy->rowCount() > 0;
+    // 问**视图那层**：空不空要按当前选项卡算，历史页有东西不代表收藏页也有。
+    // 注意这里的「空」指的是**这一页一条都没有**，不是「当前页没有更多了」——
+    // 「还有没有更多」是 m_paging->hasMore()，那个只跟加载有关，跟空状态无关。
+    const bool hasRows = m_paging->rowCount() > 0;
 
     m_list->setVisible(hasRows);
     m_empty->setVisible(!hasRows);
 
     if (!hasRows) {
-        m_empty->setText(m_proxy->mode() == ClipFilterProxy::Favorites
+        m_empty->setText(m_filter->mode() == ClipFilterProxy::Favorites
                              ? QStringLiteral("还没有收藏。\n\n点每条右边的星星把它收进来。")
                              : QStringLiteral("还没有剪贴板历史。\n\n复制点什么，这里就会出现。"));
     }
 }
 
+void MainWindow::maybeLoadMore()
+{
+    // 位置式：能滚、而且滚到底了，就再加一页。
+    //
+    // maximum() > 0 这个前置条件很重要：面板被拉得很高、一页填不满视口时
+    // maximum() 是 0，那是"永远到底"，不能拿它当"用户滚到了底"——
+    // 那种情况交给 ensureViewportFilled()。
+    QScrollBar *bar = m_list->verticalScrollBar();
+    if (bar->maximum() <= 0 || bar->value() < bar->maximum())
+        return;
+    if (!m_paging->hasMore())
+        return;
+
+    m_paging->loadMore();
+}
+
+void MainWindow::ensureViewportFilled()
+{
+    // 填充式：一页填不满视口（面板被拉高、刚启动、刚切页）就继续补，
+    // 否则用户看到的是一片空白，得自己去滚一下才知道还有内容。
+    //
+    // 判据是**行数 vs 视口高度**，不看滚动条 —— 就是上面说的那个「永远到底」的坑。
+    if (m_fillingViewport)
+        return;
+    m_fillingViewport = true;
+
+    const int rowHeight = m_list->sizeHintForRow(0);
+    if (rowHeight > 0) {
+        const int fits = m_list->viewport()->height() / rowHeight + 1;
+        // guard 是防御性的：hasMore() 每次 loadMore 都严格收敛，正常不会转这么久
+        int guard = 0;
+        while (m_paging->hasMore() && m_paging->visibleCount() < fits && ++guard < 1000)
+            m_paging->loadMore();
+    }
+
+    m_fillingViewport = false;
+}
+
 void MainWindow::onTabChanged(int tabIndex)
 {
-    m_proxy->setMode(tabIndex == 1 ? ClipFilterProxy::Favorites : ClipFilterProxy::History);
+    m_filter->setMode(tabIndex == 1 ? ClipFilterProxy::Favorites : ClipFilterProxy::History);
+    // 切页把页数拨回一页。显式调 —— 不依赖过滤层恰好发了哪个信号。
+    m_paging->resetPaging();
 
     // 切页必须把这些状态一起清掉，否则会出现「这一页根本没点过的高亮」这种东西：
     //   - 预览：计时器可能正为一条马上要被过滤掉的行计时，到点就会弹一条不在当前页的
@@ -519,22 +577,23 @@ void MainWindow::onTabChanged(int tabIndex)
     m_list->setCurrentIndex(QModelIndex());
     m_list->scrollToTop();
 
-    // invalidateFilter() 到底发 modelReset 还是 layoutChanged 不值得赌，直接自己刷一遍
+    // 切完页可能一页都填不满视口（收藏页尤其容易），补一下
+    QTimer::singleShot(0, this, &MainWindow::ensureViewportFilled);
     updateEmptyState();
 }
 
 void MainWindow::toggleFavorite(const QModelIndex &proxyIndex)
 {
-    const QModelIndex source = m_proxy->mapToSource(proxyIndex);
-    if (!source.isValid())
+    const int row = m_paging->storeRow(proxyIndex);
+    if (row < 0)
         return;
 
-    const int row = source.row();
     m_store->setFavorite(row, !m_store->isFavorite(row));
 
-    // 在收藏页取消收藏，那一行必须立刻消失；代理不会自己重评估这一行。
+    // 在收藏页取消收藏，那一行必须立刻消失；过滤代理不会自己重评估这一行。
     // 不能放在 dataChanged 的槽里做 —— 那是在源信号发出过程中重入。
-    m_proxy->refresh();
+    m_filter->refresh();
+    m_paging->refreshWindow();
     updateEmptyState();   // 同上：取消掉最后一条收藏时要切到空状态文案
 }
 
@@ -671,7 +730,12 @@ void MainWindow::showPreview()
     const QModelIndex index = m_previewIndex;
 
     if (index.data(ClipStore::KindRole).toInt() == int(Clip::Image)) {
-        m_preview->showImage(index.data(ClipStore::ImageRole).value<QImage>());
+        // 懒加载：从磁盘恢复的条目内存里没有原图，这里才去读。
+        // 读不到（文件被删了）就不弹，也不报错。
+        const QImage image = m_store->loadFullImage(m_paging->storeRow(index));
+        if (image.isNull())
+            return;
+        m_preview->showImage(image);
         // 摆在面板外侧、对着光标的高度。用光标而不是行矩形：面板自己不抢焦点，
         // 光标才是「用户正看着哪儿」的唯一信号。
         m_preview->showNextTo(this, QCursor::pos());

@@ -39,6 +39,12 @@ qt_add_executable(ClipNote WIN32
     src/model/ClipFilterProxy.h
     src/model/ClipFilterProxy.cpp
 
+    src/model/ClipImageFile.h
+    src/model/ClipImageFile.cpp
+
+    src/model/ClipPageProxy.h
+    src/model/ClipPageProxy.cpp
+
     src/model/ClipboardWatcher.h
     src/model/ClipboardWatcher.cpp
 

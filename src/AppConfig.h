@@ -50,6 +50,12 @@ inline QSize defaultPanelSize() { return QSize(360, 440); }
 inline int imagePreviewDelayMs() { return 300; }
 inline int textPreviewDelayMs() { return 500; }
 
+// 列表每次显示多少条，滚到底再加载这么多。
+//
+// 面板默认高度能显示十来行，一页 20 条留出滚动余地；太小了滚两下就到底，
+// 太大了等于没分页。
+inline int itemsPerPage() { return 20; }
+
 // 历史落盘的防抖：模型变了之后等这么久没有新变化才真写盘。
 // 不防抖的话每复制一次就写一遍文件 —— 一次 Ctrl+C 写一次还勉强能接受，
 // 但置顶/去重/截断会连着发好几个模型信号，那就是同一瞬间写好几次。
