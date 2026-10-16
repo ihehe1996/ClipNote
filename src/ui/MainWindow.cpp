@@ -54,6 +54,12 @@ QSize restoredPanelSize()
 MainWindow::MainWindow(ClipStore *store, ClipboardWatcher *watcher, QWidget *parent)
     : QWidget(parent), m_store(store), m_watcher(watcher)
 {
+    // 原生窗口标题**故意**不带版本号 —— 用户看到的那行字是自绘标题栏里那个 QLabel
+    //（TitleBar，带版本号）。两个原因：
+    //   1. 它跟应用的显示名（main.cpp 的 setApplicationDisplayName）一模一样，而 Qt 只在
+    //      标题**不以显示名结尾**时才追加「 - ClipNote」。所以现在枚举到的窗口标题干干净净
+    //      就是「ClipNote」；改成带版本号反而会变成「ClipNote v1.0.1 - ClipNote」。
+    //   2. tools/check-panel.py 靠这个标题从进程外认面板（隐藏 owner 用的是另一个标题）。
     setWindowTitle(QStringLiteral("ClipNote"));
 
     // WindowDoesNotAcceptFocus 对应 Win32 的 WS_EX_NOACTIVATE：本窗口永远不成为活动
