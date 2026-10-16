@@ -67,13 +67,16 @@ protected:
     // 拖边缘改大小全靠原生消息，见 platform/WindowResizer.h
     bool nativeEvent(const QByteArray &eventType, void *message, qintptr *result) override;
     void resizeEvent(QResizeEvent *event) override;
+    void moveEvent(QMoveEvent *event) override;
     // 悬停提示要盯着列表视口：视图本身没有「鼠标在这一格里挪了挪」这种信号
     //（entered() 只在换行的时候发），而且 Qt 自动弹气泡的时机也要在这里接管
     //（它的延迟没有公开接口，见 eventFilter 里的说明）。
     bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
-    void positionNearCursor();
+    void placePanel();
+    QPoint clampedToScreen(const QPoint &wanted) const;
+    void rememberSelfPosition();
     void updateEmptyState();
     void pasteRow(const QModelIndex &index);
     void showContextMenu(const QPoint &pos);
@@ -115,8 +118,11 @@ private:
     QPersistentModelIndex m_starIndex;      // 代理空间
 
     // 尺寸变了要记进 QSettings，但拖动时 resizeEvent 是**每帧**一次，
-    // 不能每帧都去写一遍注册表 —— 停手之后再落盘。
+    // 不能每帧都去写一遍注册表 —— 停手之后再落盘。位置同理，见 moveEvent()。
     QTimer *m_saveSizeTimer = nullptr;
+    QTimer *m_savePositionTimer = nullptr;
+    // 最近一次「我们自己摆」的位置，用来把程序的摆放和用户的拖动区分开
+    QPoint m_selfPositionedAt;
 
     // 静默检查专用。手动检查用的是对话框里那个，两者互不干扰 ——
     // 共用一个的话，用户手点「检查更新」会把启动时那次请求顶掉。

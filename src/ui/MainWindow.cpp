@@ -25,6 +25,7 @@
 #include <QListView>
 #include <QMenu>
 #include <QMouseEvent>
+#include <QMoveEvent>
 #include <QPainter>
 #include <QResizeEvent>
 #include <QScreen>
@@ -100,7 +101,7 @@ MainWindow::MainWindow(ClipStore *store, ClipboardWatcher *watcher, QWidget *par
     setAttribute(Qt::WA_ShowWithoutActivating);
 
     // 尺寸可以拖边缘改（见 platform/WindowResizer.h），所以这里只用记着的那个尺寸，
-    // 没有就退回默认值。**位置不记** —— 它是 positionNearCursor() 每次唤出时按鼠标现算的。
+    // 没有就退回默认值。位置同理归 placePanel() 管（没拖过居中，拖过按拖到的地方）。
     setMinimumSize(minimumPanelSize());
     resize(restoredPanelSize());
 
@@ -109,6 +110,14 @@ MainWindow::MainWindow(ClipStore *store, ClipboardWatcher *watcher, QWidget *par
     m_saveSizeTimer->setInterval(400);
     connect(m_saveSizeTimer, &QTimer::timeout, this, [this] {
         QSettings().setValue(QStringLiteral("panel/size"), size());
+    });
+
+    // 用户拖动面板之后记下位置，下次启动按它摆（没拖过则居中，见 placePanel）。
+    m_savePositionTimer = new QTimer(this);
+    m_savePositionTimer->setSingleShot(true);
+    m_savePositionTimer->setInterval(400);
+    connect(m_savePositionTimer, &QTimer::timeout, this, [this] {
+        QSettings().setValue(QStringLiteral("panel/pos"), pos());
     });
 
     m_titleBar = new TitleBar(this);
@@ -258,7 +267,7 @@ void MainWindow::toggle()
 
 void MainWindow::showPanel()
 {
-    positionNearCursor();
+    placePanel();
 
     // Qt::WindowDoesNotAcceptFocus 在本机不会真的落到窗口样式上，得手工补
     // WS_EX_NOACTIVATE（详见 AutoPaste.h）。得在 show() 之前补。
@@ -416,24 +425,68 @@ void MainWindow::showContextMenu(const QPoint &pos)
     hidePreview();   // 删完/清完，光标底下可能已经不是刚才那一条了
 }
 
-void MainWindow::positionNearCursor()
+void MainWindow::placePanel()
 {
+    const QPoint saved = QSettings().value(QStringLiteral("panel/pos")).toPoint();
+    if (!saved.isNull()) {
+        // 用户拖动过 —— 按他放的地方摆。这里存的是屏幕坐标，可能已经不在当前屏幕上了
+        //（换过显示器、改过分辨率），所以还是要夹一次。
+        move(clampedToScreen(saved));
+        rememberSelfPosition();
+        return;
+    }
+
+    // 没拖过就居中显示，摆在光标所在那块屏幕上，再夹进可用区域。
     QScreen *screen = QGuiApplication::screenAt(QCursor::pos());
     if (!screen)
         screen = QGuiApplication::primaryScreen();
-    if (!screen)
+    if (!screen) {
+        rememberSelfPosition();
         return;
+    }
 
     const QRect area = screen->availableGeometry();
-    const QPoint cursor = QCursor::pos();
+    move(area.center() - QPoint(width() / 2, height() / 2));
+    rememberSelfPosition();
+}
 
-    // 出现在鼠标附近，但夹在屏幕可用区域内。
-    // 上界取 max(左/上, 右/下 - 尺寸)，免得窗口比屏幕还大时 qBound 的上下界翻转。
+QPoint MainWindow::clampedToScreen(const QPoint &wanted) const
+{
+    // 按窗口左上角所在的那块屏幕算；那块屏幕没了就退回光标所在的那块
+    QScreen *screen = QGuiApplication::screenAt(wanted);
+    if (!screen)
+        screen = QGuiApplication::screenAt(QCursor::pos());
+    if (!screen)
+        screen = QGuiApplication::primaryScreen();
+    if (!screen)
+        return wanted;
+
+    const QRect area = screen->availableGeometry();
+    // 上界取 max(左/上, 右/下 - 尺寸)：窗口比屏幕还大时别让 qBound 的上下界翻转
     const int maxX = qMax(area.left(), area.right() - width());
     const int maxY = qMax(area.top(), area.bottom() - height());
+    return QPoint(qBound(area.left(), wanted.x(), maxX),
+                  qBound(area.top(), wanted.y(), maxY));
+}
 
-    move(qBound(area.left(), cursor.x() - width() / 2, maxX),
-         qBound(area.top(), cursor.y() - 40, maxY));
+void MainWindow::rememberSelfPosition()
+{
+    // 记下「这个位置是我们自己摆的」。moveEvent 靠它区分用户拖动，
+    // 不然每次唤出算出来的位置都会被当成用户的选择存下来。
+    m_selfPositionedAt = pos();
+}
+
+void MainWindow::moveEvent(QMoveEvent *event)
+{
+    QWidget::moveEvent(event);
+
+    // 我们自己摆的那一下不算用户拖动（见 rememberSelfPosition）
+    if (event->pos() == m_selfPositionedAt)
+        return;
+
+    // 拖完记一笔。防抖：拖动过程中 moveEvent 是连续来的，不能每帧写一遍注册表。
+    m_selfPositionedAt = event->pos();
+    m_savePositionTimer->start();
 }
 
 void MainWindow::updateEmptyState()
