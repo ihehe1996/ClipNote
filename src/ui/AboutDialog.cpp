@@ -74,12 +74,6 @@ AboutDialog::AboutDialog(QWidget *parent) : QDialog(parent)
     header->addLayout(headerText, 1);
 
     // 这几行是给「报 bug」用的：光看版本号不知道是哪个 Qt、哪个编译器出的问题
-    const QString repo = updateRepo();
-    const QString repoText = repo.isEmpty()
-                                 ? QStringLiteral("—（还没配置，见 src/AppConfig.h）")
-                                 : QStringLiteral("<a href=\"https://github.com/%1\">%1</a>")
-                                       .arg(repo.toHtmlEscaped());
-
     auto *details = new QFormLayout;
     details->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
     details->setHorizontalSpacing(12);
@@ -90,12 +84,6 @@ AboutDialog::AboutDialog(QWidget *parent) : QDialog(parent)
     details->addRow(QStringLiteral("编译器"), new QLabel(compilerName(), this));
     details->addRow(QStringLiteral("系统"),
                     new QLabel(QSysInfo::prettyProductName(), this));
-    {
-        auto *repoLabel = new QLabel(repoText, this);
-        repoLabel->setOpenExternalLinks(true);
-        repoLabel->setTextInteractionFlags(Qt::TextBrowserInteraction);
-        details->addRow(QStringLiteral("项目主页"), repoLabel);
-    }
 
     auto *copyInfo = new QPushButton(QStringLiteral("复制版本信息"), this);
     copyInfo->setToolTip(QStringLiteral("把这台机器上的版本、Qt、编译器信息复制到剪贴板，报问题时贴这个"));
