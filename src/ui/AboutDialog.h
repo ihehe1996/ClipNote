@@ -14,10 +14,6 @@ class AboutDialog : public QDialog
 
 public:
     explicit AboutDialog(QWidget *parent = nullptr);
-
-private:
-    // 「复制版本信息」用的内容。出问题时报 bug 直接粘这个就够了。
-    static QString buildVersionInfo();
 };
 
 } // namespace ClipNote

@@ -4,39 +4,14 @@
 #include "ui/AppIcon.h"
 
 #include <QApplication>
-#include <QClipboard>
 #include <QDialogButtonBox>
 #include <QFormLayout>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
-#include <QSysInfo>
 #include <QVBoxLayout>
 
 namespace ClipNote {
-namespace {
-
-// 编译器名，只为了写在「关于」里，出问题时能一眼看出是哪个构建
-QString compilerName()
-{
-#if defined(__MINGW32__) || defined(__MINGW64__)
-    return QStringLiteral("MinGW GCC %1.%2.%3")
-        .arg(__GNUC__)
-        .arg(__GNUC_MINOR__)
-        .arg(__GNUC_PATCHLEVEL__);
-#elif defined(_MSC_VER)
-    return QStringLiteral("MSVC %1").arg(_MSC_VER);
-#else
-    return QStringLiteral("未知编译器");
-#endif
-}
-
-QString orDash(const QString &text)
-{
-    return text.isEmpty() ? QStringLiteral("—") : text;
-}
-
-} // namespace
 
 AboutDialog::AboutDialog(QWidget *parent) : QDialog(parent)
 {
@@ -87,17 +62,11 @@ AboutDialog::AboutDialog(QWidget *parent) : QDialog(parent)
         homeLabel->setTextInteractionFlags(Qt::TextBrowserInteraction);
         details->addRow(QStringLiteral("作者主页"), homeLabel);
     }
-
-    auto *copyInfo = new QPushButton(QStringLiteral("复制版本信息"), this);
-    copyInfo->setToolTip(QStringLiteral("把这台机器上的版本、Qt、编译器信息复制到剪贴板，报问题时贴这个"));
-    connect(copyInfo, &QPushButton::clicked, this, [this, copyInfo] {
-        QApplication::clipboard()->setText(buildVersionInfo());
-        copyInfo->setText(QStringLiteral("已复制"));
-        copyInfo->setEnabled(false);
-    });
+    // QQ 就是一行文字，不做成链接：点它得靠系统注册了 tencent:// 协议，
+    // 没装 QQ 或者没注册的机器上点一下毫无反应，比不能点更让人困惑。
+    details->addRow(QStringLiteral("作者 QQ"), new QLabel(QStringLiteral("10220739"), this));
 
     auto *buttons = new QDialogButtonBox(this);
-    buttons->addButton(copyInfo, QDialogButtonBox::ActionRole);
     QPushButton *close = buttons->addButton(QStringLiteral("关闭"), QDialogButtonBox::RejectRole);
     close->setDefault(true);
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
@@ -109,21 +78,6 @@ AboutDialog::AboutDialog(QWidget *parent) : QDialog(parent)
     layout->addLayout(details);
     layout->addStretch(1);
     layout->addWidget(buttons);
-}
-
-QString AboutDialog::buildVersionInfo()
-{
-    return QStringLiteral(
-               "ClipNote %1\n"
-               "Qt %2\n"
-               "%3\n"
-               "%4\n"
-               "热键 %5")
-        .arg(QCoreApplication::applicationVersion(),
-             QString::fromLatin1(qVersion()),
-             compilerName(),
-             QSysInfo::prettyProductName(),
-             orDash(defaultHotkey()));
 }
 
 } // namespace ClipNote
