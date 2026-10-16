@@ -5,6 +5,10 @@
   2. 挂上了 owner —— 因而不会在任务栏里冒出按钮
   3. 最小化/最大化按钮是关掉的 —— 面板没有任务栏按钮，一旦能最小化就再也找不回来
   4. 唤出面板前后，前台窗口没有变化 —— 用户原来那个程序连光标都不会闪
+  5. 四条边和四个角返回缩放命中码，正中间是 HTCLIENT —— 窗口能拖边缘改大小
+
+第 5 条问的是 WM_NCHITTEST：在边缘返回 HTLEFT/HTBOTTOM 这类码，系统才会给缩放光标、
+才谈得上拖动；而正中间必须仍然是 HTCLIENT，否则整扇窗口都成了非客户区，列表点不动。
 
 第 1、4 条是「单击即粘贴」能工作的前提：没有它们，用户一点面板就把面板激活了，
 紧接着注入的 Ctrl+V 会打到面板自己身上，表现就是「点了没反应」。
@@ -40,6 +44,16 @@ WS_MAXIMIZEBOX = 0x00010000
 GW_OWNER = 4
 WM_HOTKEY = 0x0312
 WM_LBUTTONDOWN, WM_LBUTTONUP = 0x0201, 0x0202
+WM_NCHITTEST = 0x0084
+
+# 命中码。面板在边缘必须返回这些，系统才会把光标画成缩放箭头；
+# 我们借此确认「拖边缘能改大小」这件事在原生那一层是通的。
+HTCLIENT = 1
+HTLEFT, HTRIGHT, HTTOP, HTBOTTOM = 10, 11, 12, 15
+HTTOPLEFT, HTTOPRIGHT, HTBOTTOMLEFT, HTBOTTOMRIGHT = 13, 14, 16, 17
+RESIZE_HITS = {HTLEFT, HTRIGHT, HTTOP, HTBOTTOM,
+               HTTOPLEFT, HTTOPRIGHT, HTBOTTOMLEFT, HTBOTTOMRIGHT}
+
 HOTKEY_ID = 0x434E            # 对应 src/platform/GlobalHotkey.cpp 里的 kHotkeyId（'CN'）
 PANEL_TITLE = "ClipNote"      # 面板的标题；隐藏 owner 用的是另一个标题，好区分
 PANEL_WIDTH = 360             # 面板的逻辑宽度，用来把图钉按钮的位置换算出来
@@ -72,6 +86,10 @@ user32.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctyp
                                 ctypes.c_int, ctypes.c_int, wintypes.UINT]
 k32.GetModuleHandleW.restype = wintypes.HMODULE
 k32.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
+# WM_NCHITTEST 要拿返回值，所以必须用 SendMessageW（PostMessage 拿不到）。
+user32.SendMessageW.argtypes = [wintypes.HWND, wintypes.UINT,
+                                wintypes.WPARAM, wintypes.LPARAM]
+user32.SendMessageW.restype = ctypes.c_ssize_t
 
 EnumProc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
 
@@ -94,6 +112,22 @@ def style(hwnd):
 
 def ex_style(hwnd):
     return user32.GetWindowLongW(hwnd, GWL_EXSTYLE) & 0xFFFFFFFF
+
+
+def window_rect(hwnd):
+    rect = wintypes.RECT()
+    user32.GetWindowRect(hwnd, ctypes.byref(rect))
+    return rect
+
+
+def hit_test(hwnd, x, y):
+    """问窗口「这个**屏幕**坐标压在你身上的哪一部分」。
+
+    WM_NCHITTEST 的 lParam 是屏幕坐标（不是客户区坐标），DPI 感知上面已经声明过，
+    所以这里的物理像素和 GetWindowRect 给的是同一个坐标系。
+    """
+    return user32.SendMessageW(hwnd, WM_NCHITTEST, 0,
+                               ((y & 0xFFFF) << 16) | (x & 0xFFFF))
 
 
 def foreground_pid():
@@ -170,12 +204,43 @@ def main():
     print(f"  前台 pid: {before_pid} -> {after_pid}")
     print()
 
+    # 面板能不能拖边缘改大小，由「窗口在边缘返回什么命中码」决定。
+    # 逐点问一遍：四条边的中点、四个角、以及正中间（正中间必须是 HTCLIENT，
+    # 否则整扇窗口都会变成非客户区，列表就点不动了）。
+    rect = window_rect(panel)
+    mid_x = (rect.left + rect.right) // 2
+    mid_y = (rect.top + rect.bottom) // 2
+    probes = [
+        ("左边", HTLEFT, rect.left + 1, mid_y),
+        ("右边", HTRIGHT, rect.right - 1, mid_y),
+        ("上边", HTTOP, mid_x, rect.top + 1),
+        ("下边", HTBOTTOM, mid_x, rect.bottom - 1),
+        ("左上角", HTTOPLEFT, rect.left + 1, rect.top + 1),
+        ("右上角", HTTOPRIGHT, rect.right - 1, rect.top + 1),
+        ("左下角", HTBOTTOMLEFT, rect.left + 1, rect.bottom - 1),
+        ("右下角", HTBOTTOMRIGHT, rect.right - 1, rect.bottom - 1),
+    ]
+
+    print(f"  窗口矩形=({rect.left},{rect.top})-({rect.right},{rect.bottom})")
+    edge_ok = True
+    for name, want, x, y in probes:
+        got = hit_test(panel, x, y)
+        if got != want:
+            edge_ok = False
+        print(f"  {name}: 期望 {want}，实际 {got}")
+    center_hit = hit_test(panel, mid_x, mid_y)
+    print(f"  正中间: 期望 {HTCLIENT}，实际 {center_hit}")
+    print()
+
     results = [
         (visible, "面板被唤出（可见）", None),
         (noactivate, "带 WS_EX_NOACTIVATE（点它不会激活面板）", None),
         (has_owner, "挂了 owner（不会在任务栏冒出按钮）", None),
         (no_min and no_max, "最小化/最大化已关（避免最小化后再也找不回来）", None),
         (focus_kept, f"前台窗口没被抢走（pid 保持 {before_pid}）", None),
+        (edge_ok, "四条边和四个角返回缩放命中码（能拖边缘改大小）", None),
+        (center_hit == HTCLIENT,
+         f"正中间返回 HTCLIENT（列表照常收鼠标），实际 {center_hit}", None),
     ]
     for ok, desc, _detail in results:
         print(f"[{'OK ' if ok else 'FAIL'}] {desc}")

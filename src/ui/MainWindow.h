@@ -1,11 +1,15 @@
 #pragma once
 
+#include "platform/WindowResizer.h"   // m_resizer 是值成员，这里得要完整类型
+
 #include <QModelIndex>
 #include <QWidget>
 
 QT_BEGIN_NAMESPACE
 class QLabel;
 class QListView;
+class QResizeEvent;
+class QTimer;
 QT_END_NAMESPACE
 
 namespace ClipNote {
@@ -55,6 +59,9 @@ public slots:
 protected:
     void closeEvent(QCloseEvent *event) override;
     void paintEvent(QPaintEvent *event) override;
+    // 拖边缘改大小全靠原生消息，见 platform/WindowResizer.h
+    bool nativeEvent(const QByteArray &eventType, void *message, qintptr *result) override;
+    void resizeEvent(QResizeEvent *event) override;
 
 private:
     void positionNearCursor();
@@ -68,6 +75,12 @@ private:
     TitleBar *m_titleBar = nullptr;   // 自绘标题栏（系统的没有，见 TitleBar.h）
     QListView *m_list = nullptr;
     QLabel *m_empty = nullptr;
+
+    WindowResizer m_resizer{this};   // 拖边缘改大小（无边框窗口得自己补回来）
+
+    // 尺寸变了要记进 QSettings，但拖动时 resizeEvent 是**每帧**一次，
+    // 不能每帧都去写一遍注册表 —— 停手之后再落盘。
+    QTimer *m_saveSizeTimer = nullptr;
 
     // 静默检查专用。手动检查用的是对话框里那个，两者互不干扰 ——
     // 共用一个的话，用户手点「检查更新」会把启动时那次请求顶掉。

@@ -42,6 +42,9 @@ qt_add_executable(ClipNote WIN32
     src/platform/AutoPaste.h
     src/platform/AutoPaste.cpp
 
+    src/platform/WindowResizer.h
+    src/platform/WindowResizer.cpp
+
     src/update/Version.h
 
     src/update/ReleaseInfo.h

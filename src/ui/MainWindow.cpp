@@ -21,10 +21,32 @@
 #include <QListView>
 #include <QMenu>
 #include <QPainter>
+#include <QResizeEvent>
 #include <QScreen>
+#include <QSettings>
+#include <QTimer>
 #include <QVBoxLayout>
 
 namespace ClipNote {
+
+namespace {
+
+// 上次用的面板尺寸。存过的值要夹两道，因为它可能是「换过显示器之后已经放不下的旧值」：
+// 先不小于最小尺寸，再不超过当前屏幕的可用区域，最后再兜一次下限（屏幕比最小尺寸还小的
+// 极端情况下，宁可超出屏幕也要保住排版）。
+QSize restoredPanelSize()
+{
+    QSize size = QSettings().value(QStringLiteral("panel/size")).toSize();
+    if (size.isEmpty())
+        size = defaultPanelSize();
+
+    size = size.expandedTo(minimumPanelSize());
+    if (QScreen *screen = QGuiApplication::primaryScreen())
+        size = size.boundedTo(screen->availableGeometry().size());
+    return size.expandedTo(minimumPanelSize());
+}
+
+} // namespace
 
 MainWindow::MainWindow(ClipStore *store, ClipboardWatcher *watcher, QWidget *parent)
     : QWidget(parent), m_store(store), m_watcher(watcher)
@@ -39,7 +61,8 @@ MainWindow::MainWindow(ClipStore *store, ClipboardWatcher *watcher, QWidget *par
     // 合成，应用在 WM_NCPAINT 里画上去的东西会被盖掉（实测过），所以想在标题栏上多放
     // 一颗按钮就只能整条自己画，窗口也就没有系统边框了。
     //
-    // 代价：没有系统的拖拽调大小，面板做成了固定尺寸；也没有原生投影。
+    // 代价：没有系统的拖拽调大小（自己补回来了，见 platform/WindowResizer.h）；
+    // 也没有原生投影。
     const Qt::WindowFlags flags = Qt::Window | Qt::FramelessWindowHint
                                   | Qt::WindowStaysOnTopHint | Qt::WindowDoesNotAcceptFocus;
 
@@ -63,7 +86,17 @@ MainWindow::MainWindow(ClipStore *store, ClipboardWatcher *watcher, QWidget *par
     // 显示时也不激活。和上面的 flag 一起用，保险。
     setAttribute(Qt::WA_ShowWithoutActivating);
 
-    resize(360, 440);
+    // 尺寸可以拖边缘改（见 platform/WindowResizer.h），所以这里只用记着的那个尺寸，
+    // 没有就退回默认值。**位置不记** —— 它是 positionNearCursor() 每次唤出时按鼠标现算的。
+    setMinimumSize(minimumPanelSize());
+    resize(restoredPanelSize());
+
+    m_saveSizeTimer = new QTimer(this);
+    m_saveSizeTimer->setSingleShot(true);
+    m_saveSizeTimer->setInterval(400);
+    connect(m_saveSizeTimer, &QTimer::timeout, this, [this] {
+        QSettings().setValue(QStringLiteral("panel/size"), size());
+    });
 
     m_titleBar = new TitleBar(this);
     connect(m_titleBar, &TitleBar::closeRequested, this, &MainWindow::hidePanel);
@@ -314,6 +347,27 @@ void MainWindow::closeEvent(QCloseEvent *event)
     // 托盘程序里「关窗口」= 收起来，不是退出。退出走托盘菜单。
     event->ignore();
     hidePanel();
+}
+
+bool MainWindow::nativeEvent(const QByteArray &eventType, void *message, qintptr *result)
+{
+    // 拖边缘改大小全靠原生消息 —— 无边框窗口没有系统缩放边框，而这块**不能用 Qt 的
+    // 鼠标事件**来做：布局是 setContentsMargins(0,0,0,0)，标题栏和 body 铺满整个矩形，
+    // 边缘那几像素属于子控件，Qt 的鼠标事件又不往上冒泡，MainWindow 根本收不到。
+    // 原生命中测试是窗口级的，不受子控件影响。
+    if (m_resizer.handleMessage(eventType, message, result))
+        return true;
+
+    return QWidget::nativeEvent(eventType, message, result);
+}
+
+void MainWindow::resizeEvent(QResizeEvent *event)
+{
+    QWidget::resizeEvent(event);
+
+    // 记下来，但延迟落盘：拖动过程中这个函数每帧都跑一次，不能每帧写一遍注册表。
+    // 用重启式单次定时器，手一停就写。
+    m_saveSizeTimer->start();
 }
 
 } // namespace ClipNote

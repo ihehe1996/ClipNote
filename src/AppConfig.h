@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QSize>
 #include <QString>
 #include <QStringList>
 
@@ -37,6 +38,17 @@ inline QString defaultHotkey() { return QStringLiteral("Alt+Q"); }
 // 自动粘贴总开关。关掉之后，选中一条历史只会写回剪贴板，
 // 不做任何合成按键 —— 用户自己按 Ctrl+V。
 inline bool autoPasteEnabled() { return true; }
+
+// 面板的默认尺寸。只在「没存过尺寸」或者「存的值不合法」时用 —— 正常情况下面板
+// 会沿用用户上次拖出来的大小（记在 QSettings 的 panel/size 里）。
+inline QSize defaultPanelSize() { return QSize(360, 440); }
+
+// 面板能拖到多小。低于这个尺寸排版就开始坏了，两个方向各有各的下限：
+//
+//   宽度 —— 标题栏在约 170px 以下会把标题挤没、齿轮和关闭两颗按钮互压；
+//           列表每一行的正文可用宽度 = 行宽 − 83 − 相对时间的宽度（约 40~55px）。
+//   高度 —— 标题栏 32 + body 上下边距 12，剩下至少要放得下两行（每行 48）。
+inline QSize minimumPanelSize() { return QSize(260, 200); }
 
 // 等修饰键（Alt 等）物理抬起的最长时间，毫秒。
 //
