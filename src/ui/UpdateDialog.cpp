@@ -151,13 +151,17 @@ void UpdateDialog::applyState(State state)
     m_progress->hide();
     m_primary->hide();
     m_secondary->hide();
+    m_detail->show();   // 「正在检查更新」那一档会把它藏起来，所以这里统一恢复
     m_primary->setEnabled(true);
     m_close->setEnabled(true);
 
     switch (state) {
     case State::Checking:
         m_headline->setText(QStringLiteral("正在检查更新…"));
-        m_detail->setText(QStringLiteral("正在向 GitHub 查询最新版本。"));
+        // 「正在向 GitHub 查询最新版本」那句说明是废话，不写。清空之外还得藏起来，
+        // 否则从「没能完成」重试回来时，上一档那句错误说明会挂在下面。
+        m_detail->clear();
+        m_detail->hide();
         m_primary->hide();
         break;
 
