@@ -1,6 +1,5 @@
 #include "ui/TitleBar.h"
 
-#include "AppConfig.h"
 #include "ui/AppIcon.h"
 
 #include <QAction>
@@ -86,8 +85,7 @@ TitleBar::TitleBar(QWidget *parent) : QWidget(parent)
     icon->setPixmap(appIcon().pixmap(kGlyphSize, kGlyphSize));
     icon->setFixedSize(kGlyphSize, kGlyphSize);
 
-    // 版本号跟着 CMakeLists.txt 走（appVersion() 读的是编译期宏），别再手写一遍
-    m_title = new QLabel(QStringLiteral("ClipNote %1").arg(appVersion()), this);
+    m_title = new QLabel(QStringLiteral("ClipNote"), this);
 
     m_gear = new QToolButton(this);
     m_gear->setIcon(QIcon(gearGlyph(kGlyphSize, QColor(0x44, 0x44, 0x44))));
