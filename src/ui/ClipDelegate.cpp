@@ -18,9 +18,10 @@ constexpr int kRowHeight = 48;
 constexpr int kHighlightInset = 3;
 constexpr int kPadding = 10;
 
-// 左侧那条强调竖条占用的一条空槽。**不管有没有选中都留着**，
-// 否则选中时正文会横向跳一下。
-constexpr int kAccentGutter = 8;
+// 这里**曾经有个 kAccentGutter = 8**，当作「专门给选中竖条留的空槽」，结果左侧
+// 内容要从 10+8=18px 才开始，而右侧星星只缩进 kPadding(10) —— 左右不对称，一眼
+// 就看出来了。其实竖条本来就画在 kPadding 那 10px 里面（见 paint() 里的 bar），
+// 不需要额外留槽，所以直接去掉了。
 
 // 左侧的缩略图 / 字形区。所有行都留出这块，正文才能左边对齐。
 constexpr int kLeadingSize = 34;
@@ -124,7 +125,9 @@ void drawThumbnail(QPainter *painter, const QRectF &box, const QPixmap &thumb)
 
 QRect leadingRect(const QRect &row)
 {
-    const int contentLeft = row.left() + kPadding + kAccentGutter;
+    // 左边距就是 kPadding —— 要和右边那颗星星离右缘的距离（starRect 里的 kPadding）
+    // 一样，不然内容看着是歪的。
+    const int contentLeft = row.left() + kPadding;
     return QRect(contentLeft, row.top() + (row.height() - kLeadingSize) / 2,
                  kLeadingSize, kLeadingSize);
 }
@@ -172,7 +175,8 @@ void ClipDelegate::paint(QPainter *painter, const QStyleOptionViewItem &option,
     if (current) {
         painter->setPen(Qt::NoPen);
         painter->setBrush(kAccentColor);
-        const QRectF bar(row.left() + kHighlightInset + 2,
+        // 贴着高亮底框的左缘画，和右边星星离右缘的距离对称
+        const QRectF bar(row.left() + kHighlightInset,
                          row.center().y() - (kRowHeight - 26) / 2.0,
                          3, kRowHeight - 26);
         painter->drawRoundedRect(bar, 1.5, 1.5);
@@ -183,7 +187,9 @@ void ClipDelegate::paint(QPainter *painter, const QStyleOptionViewItem &option,
     if (index.data(ClipStore::KindRole).toInt() == int(Clip::Image)) {
         drawThumbnail(painter, QRectF(leading), index.data(ClipStore::ThumbRole).value<QPixmap>());
     } else {
-        drawTextGlyph(painter, QRectF(leading).adjusted(8, 9, -8, -9), kGlyphColor);
+        // 文本条目那个「段落」字形。它只是占位的，画得比缩略图小一圈才不喧宾夺主 ——
+        // 类型区是 34×34，这里内缩到 14×12。
+        drawTextGlyph(painter, QRectF(leading).adjusted(10, 11, -10, -11), kGlyphColor);
     }
 
     // 右边先给星星留出位置。时间和正文都以 textArea.right() 为右边界，
