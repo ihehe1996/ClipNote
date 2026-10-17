@@ -401,16 +401,19 @@ void MainWindow::showContextMenu(const QPoint &pos)
     QAction *unfavoriteAllAction = nullptr;
 
     if (index.isValid()) {
-        // 点在条目上：只给和「这一条」有关的动作，**不出现清空**
         favoriteAction = menu.addAction(index.data(ClipStore::FavoriteRole).toBool()
                                             ? QStringLiteral("取消收藏")
                                             : QStringLiteral("收藏"));
         removeAction = menu.addAction(QStringLiteral("删除这一条"));
-    } else {
-        // 点在空白处。清空保留收藏 —— 收藏是特意留下来的东西，被一刀切掉就没意义了。
-        clearAction = menu.addAction(QStringLiteral("清空历史（保留收藏）"));
-        unfavoriteAllAction = menu.addAction(QStringLiteral("取消全部收藏"));
     }
+
+    // 清空历史 / 取消全部收藏是**全局动作，点在条目上也给**，和空白处一样。
+    // 用分隔线和「这一条」的动作隔开，免得手滑点到。
+    // 清空保留收藏 —— 收藏是特意留下来的东西，被一刀切掉就没意义了。
+    if (index.isValid())
+        menu.addSeparator();
+    clearAction = menu.addAction(QStringLiteral("清空历史（保留收藏）"));
+    unfavoriteAllAction = menu.addAction(QStringLiteral("取消全部收藏"));
 
     QAction *chosen = menu.exec(m_list->viewport()->mapToGlobal(pos));
     if (!chosen)
