@@ -1,0 +1,20 @@
+/* ClipNote's executable icon.
+ *
+ * Compiled by windres (CMake's RC language) into the PE resource section. This is
+ * what Explorer draws on the file itself, so the desktop / Start-menu shortcuts,
+ * the taskbar button and the "Apps & features" uninstall entry all come from here.
+ * The PNG in resources/resources.qrc is a different thing: that one is the runtime
+ * QIcon (tray + title bar). Neither replaces the other.
+ *
+ * NOTE: keep this file pure ASCII, comments included. windres preprocesses it with
+ * cpp using the system code page, so non-ASCII text turns into garbage and breaks
+ * the parse -- same family of bug as tools/build-installer.ps1 losing its BOM.
+ * Explanations belong in tools/make-icon.py and CLAUDE.md, not here.
+ *
+ * The icon itself is generated from resources/clipnote.png by tools/make-icon.py.
+ * ID is an explicit integer rather than a bare name: an undefined identifier in
+ * resource-ID position is parsed as a *string* name, and the self-test looks the
+ * icon up by ID.
+ */
+#define IDI_CLIPNOTE 1
+IDI_CLIPNOTE ICON "clipnote.ico"

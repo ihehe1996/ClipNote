@@ -21,6 +21,33 @@ find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Network)
 
 qt_standard_project_setup()
 
+# 程序图标：resources/clipnote.rc 编译进 PE 的资源段。桌面/开始菜单快捷方式、
+# 任务栏和「应用和功能」里的图标认的就是那一份 —— 而 resources.qrc 里那个 png
+# 只管运行期的 QIcon（托盘、标题栏），两边不能互替。
+# windres 就在编译器旁边，CMake 自己找得到，presets 里不用加东西。
+#
+# **为什么单独编成一个小目标，而不是塞进下面 qt_add_executable 的源列表**：
+# 塞进去它会继承 ClipNote 的 include 目录，而 **windres 把这些目录原样转给预处理器
+# 时不加引号** —— Qt 的头目录正是 "D:/Program Files/QT/..."，带空格，于是命令行在
+# 空格处被截断，预处理必然失败。它报的是
+#     cc1.exe: fatal error: Files/QT/6.8.3/mingw_64/include: No such file or directory
+# 看着像 Qt 头文件找不到，其实是 windres 不加引号。实测过：同一份 .rc 把带空格的
+# -I 摘掉就正常编出目标文件，加回去就报这条。
+# 这个对象库不链接 Qt，编 .rc 时本来就没有 Qt 那些带空格的 -I。
+# 但那还不够：autogen 会给目标塞一个 `-I <构建目录>/clipnote_icon_autogen/include`，
+# 而构建目录同样可能带空格（比如仓库放在 `C:\My Projects\` 下）。所以这里把
+# AUTOMOC/AUTOUIC/AUTORCC 全关掉 —— 这个目标只有 .rc，三个都用不上。关掉之后
+# 那条 RC 编译规则里一条 -I 都没有（已在 build.ninja 里核对过），也就不会再踩。
+# （顺带：.rc 里那个 ICON "clipnote.ico" 的相对路径是相对 .rc 自己的目录解析的，
+#  不是相对构建目录 —— 所以 ico 放在 .rc 旁边就够了，不用额外给 -I。）
+#
+# 另一个不能塞进上面那个源列表的原因：那段列表没有平台条件，而 RC 语言只有 Windows 有。
+if(WIN32)
+    enable_language(RC)
+    add_library(clipnote_icon OBJECT resources/clipnote.rc)
+    set_target_properties(clipnote_icon PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
+endif()
+
 # WIN32 表示生成不带控制台窗口的 GUI 程序。
 # 代价是 qDebug() 的输出看不见，所以程序另有一个 --selftest 自检模式，
 # 结果写进当前目录的 selftest.log。
@@ -94,6 +121,11 @@ qt_add_executable(ClipNote WIN32
 
     resources/resources.qrc
 )
+
+# 把图标那个对象库的目标文件并进 exe（见上面 clipnote_icon 那段的说明）
+if(WIN32)
+    target_link_libraries(ClipNote PRIVATE clipnote_icon)
+endif()
 
 target_include_directories(ClipNote PRIVATE src)
 

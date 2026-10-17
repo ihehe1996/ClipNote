@@ -65,6 +65,12 @@ UninstallDisplayIcon={app}\{#AppExeName}
 UninstallDisplayName={#AppName}
 SetupLogging=yes
 
+; 安装程序自己也带 logo。不加这行 Setup.exe 显示的是 Windows 的默认图标。
+; 相对路径按本 .iss 文件所在目录解析，所以是 ..\resources。
+; 这份 ico 是 tools/make-icon.py 从 resources/clipnote.png 生成的，
+; 和编进 exe 资源段的是**同一个文件**（见 resources/clipnote.rc）。
+SetupIconFile=..\resources\clipnote.ico
+
 ; 关闭「友好关闭正在运行的程序」：见 [Code] 里的说明，对 ClipNote 它不管用，
 ; 留着只会多弹一个关不掉的提示框。
 CloseApplications=no

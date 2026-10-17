@@ -108,6 +108,15 @@ int runSelfTest(const QStringList &arguments)
                   .arg(pixmap.isNull() ? QStringLiteral("为空") : QStringLiteral("正常")));
     }
 
+    // 2c. exe **自己的资源段**里有没有图标（resources/clipnote.rc 编进去的那份）。
+    //     和上面 2b 查的不是一回事：2b 查的是 qrc 里的 PNG，管的是运行期画出来的
+    //     图标（托盘、标题栏）；这条查的是资源管理器在文件上画的图标 ——
+    //     桌面/开始菜单快捷方式、任务栏、卸载项全都靠它。
+    //     缺了它编译链接运行全都正常，只是静静地显示成 Windows 的默认图标
+    //     （装完之后快捷方式没有 logo，就是这个症状），所以值得钉一条。
+    check(QStringLiteral("exe 资源段里带着程序图标"), hasEmbeddedAppIcon(),
+          QStringLiteral("LoadImage 取资源 ID 1"));
+
     // 3. 剪贴板：写个哨兵值再读回来，读完还原用户原来的内容
     if (QClipboard *clipboard = QGuiApplication::clipboard()) {
         const QString saved = clipboard->text();
